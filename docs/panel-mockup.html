@@ -1,0 +1,162 @@
+<title>Gündem Paneli Taslakları</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: sol menü + üst çubuk + özet şeridi + liste/detay. Bilerek tek tema: beyaz panel. */
+:root{
+  color-scheme:light;
+  --bg:#ffffff; --page:#f7f8fa; --fg:#1d2129; --muted:#646b78; --faint:#8a909b; --line:#e4e7ec; --hover:#f2f4f7;
+  --accent:#2457d6; --accent-soft:#eaf0fd;
+  --hot:#c8341b; --hot-soft:#fdecea; --warm:#a86b00; --warm-soft:#fdf3df; --ok:#1d7f46; --ok-soft:#e5f5ec;
+  --font:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{background:var(--page);color:var(--fg)}
+body{font-family:var(--font);font-size:13px;line-height:1.45}
+.note{max-width:1240px;margin:0 auto;padding-block:20px 12px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));color:var(--muted)}
+.note b{color:var(--fg)}
+.app{max-width:1240px;margin:0 auto 40px;display:grid;grid-template-columns:200px minmax(0,1fr);background:var(--bg);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+  margin-left:max(16px,env(safe-area-inset-left,0px));margin-right:max(16px,env(safe-area-inset-right,0px))}
+@media (min-width:1272px){.app{margin-left:auto;margin-right:auto}}
+/* sol menü */
+.side{border-right:1px solid var(--line);padding:14px 10px;display:flex;flex-direction:column;gap:2px}
+.brand{font-weight:700;font-size:14px;padding:4px 10px 14px}
+.brand span{color:var(--faint);font-weight:500}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-radius:6px;color:var(--muted);font-weight:500}
+.nav:hover{background:var(--hover)}
+.nav.on{background:var(--accent-soft);color:var(--accent)}
+.count{font-size:11px;background:var(--hover);color:var(--muted);border-radius:999px;padding:0 7px;font-variant-numeric:tabular-nums}
+.nav.on .count{background:var(--accent);color:#fff}
+.side .sep{height:1px;background:var(--line);margin:10px 4px}
+/* ana alan */
+.main{min-width:0;display:flex;flex-direction:column}
+.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 18px;border-bottom:1px solid var(--line)}
+.top h1{font-size:16px;margin:0;flex:1 1 auto}
+.search{border:1px solid var(--line);border-radius:6px;padding:6px 10px;color:var(--faint);min-width:0;width:220px;max-width:100%;font:inherit;background:var(--bg)}
+.live{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.sample{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);border:1px dashed var(--line);border-radius:4px;padding:1px 6px}
+/* özet şeridi */
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-bottom:1px solid var(--line)}
+.kpi{padding:12px 18px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:2px;min-width:0}
+.kpi:last-child{border-right:0}
+.kpi .k{color:var(--muted);font-size:12px}
+.kpi .v{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.kpi .s{font-size:11px;color:var(--faint)}
+.meter{height:5px;background:var(--hover);border-radius:3px;overflow:hidden;margin-top:4px}
+.meter i{display:block;height:100%;width:32%;background:var(--accent)}
+/* liste + detay */
+.work{display:grid;grid-template-columns:minmax(0,380px) minmax(0,1fr);flex:1}
+.list{border-right:1px solid var(--line);min-width:0}
+.list-head{display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line)}
+.f{border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-size:12px;color:var(--muted);background:var(--bg)}
+.f.on{border-color:var(--fg);color:var(--fg);font-weight:500}
+.row{display:grid;grid-template-columns:40px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+.row:hover{background:var(--hover)}
+.row.sel{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+.row h4{margin:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .m{font-size:11.5px;color:var(--muted)}
+.score{font-weight:700;font-variant-numeric:tabular-nums;text-align:center;border-radius:5px;padding:2px 0;font-size:12.5px}
+.s-hot{background:var(--hot-soft);color:var(--hot)} .s-warm{background:var(--warm-soft);color:var(--warm)} .s-ok{background:var(--ok-soft);color:var(--ok)}
+.pill{font-size:11px;border-radius:999px;padding:1px 8px;white-space:nowrap}
+.p-free{background:var(--ok-soft);color:var(--ok)} .p-taken{background:var(--warm-soft);color:var(--warm)}
+.detail{padding:16px 20px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.d-head{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.d-head h2{font-size:17px;margin:0;flex:1 1 260px;text-wrap:balance}
+.facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--line);border-radius:8px}
+.fact{padding:10px 12px;border-right:1px solid var(--line);min-width:0}
+.fact:last-child{border-right:0}
+.fact .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.fact .v{font-weight:600;margin-top:2px}
+.fact a{color:var(--accent);text-decoration:none}
+.spark{display:block;width:100%;height:28px;margin-top:4px}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line)}
+.tab{padding:7px 12px;color:var(--muted);border-bottom:2px solid transparent;font-weight:500}
+.tab.on{color:var(--fg);border-color:var(--accent)}
+.draft{border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:14px;line-height:1.5}
+.draft .cnt{display:block;text-align:right;font-size:11px;color:var(--faint);margin-top:6px;font-variant-numeric:tabular-nums}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+.btn{border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:6px;padding:6px 12px;font:500 12.5px var(--font);cursor:pointer}
+.btn:hover{background:var(--hover)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn:focus-visible,.row:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* rakip tablosu */
+.sect-h{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:0}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-weight:500;color:var(--muted);font-size:12px;background:var(--page)}
+tr:last-child td{border-bottom:0}
+td.num{text-align:right} th.num{text-align:right}
+@media (max-width:900px){.work{grid-template-columns:1fr}.list{border-right:0;border-bottom:1px solid var(--line)}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi:nth-child(2){border-right:0}.kpi:nth-child(-n+2){border-bottom:1px solid var(--line)}}
+@media (max-width:640px){.app{grid-template-columns:1fr}.side{flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--line)}.brand{width:100%;padding-bottom:6px}.side .sep{display:none}.facts{grid-template-columns:1fr}.fact{border-right:0;border-bottom:1px solid var(--line)}.fact:last-child{border-bottom:0}}
+</style>
+
+<p class="note"><b>Taslak v2:</b> Beyaz, sade bir dashboard. Tüm içerik örnektir, gerçek haber değildir. Butonlar şimdilik görsel.</p>
+
+<div class="app">
+  <aside class="side">
+    <div class="brand">Pusholder <span>Gündem</span></div>
+    <div class="nav on">Gündem <span class="count">12</span></div>
+    <div class="nav">Taslaklar <span class="count">5</span></div>
+    <div class="nav">Paylaşılanlar</div>
+    <div class="nav">Rakipler</div>
+    <div class="nav">Performans</div>
+    <div class="sep"></div>
+    <div class="nav">Kaynaklar</div>
+    <div class="nav">İzleme listesi</div>
+    <div class="nav">Ayarlar</div>
+  </aside>
+
+  <main class="main">
+    <div class="top">
+      <h1>Gündem</h1>
+      <input class="search" id="q" placeholder="Konu, kaynak ya da hesap ara" aria-label="Ara">
+      <span class="live"><span class="dot"></span>Son tarama 40 sn önce</span>
+      <span class="sample">Örnek veri</span>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><span class="k">Sıcak konu (70+)</span><span class="v">4</span><span class="s">son 1 saatte</span></div>
+      <div class="kpi"><span class="k">Bekleyen taslak</span><span class="v">5</span><span class="s">en eskisi 18 dk</span></div>
+      <div class="kpi"><span class="k">Rakipten önce girilen</span><span class="v">3 / 4</span><span class="s">bugün</span></div>
+      <div class="kpi"><span class="k">X API bütçesi</span><span class="v">$3,20 <span style="font-size:13px;color:var(--faint);font-weight:500">/ $10</span></span><div class="meter"><i></i></div></div>
+    </div>
+
+    <div class="work">
+      <section class="list" aria-label="Konular">
+        <div class="list-head"><span class="f on">Tümü</span><span class="f">70+</span><span class="f">Rakip girmedi</span><span class="f">X</span><span class="f">Instagram</span></div>
+        <div class="row sel" tabindex="0"><span class="score s-hot">87</span><div><h4>Ünlü şarkıcıdan sürpriz konser</h4><span class="m">14 dk · ajans + 3 hesap</span></div><span class="pill p-free">Rakip yok</span></div>
+        <div class="row" tabindex="0"><span class="score s-hot">78</span><div><h4>Final maçı biletleri satışta</h4><span class="m">9 dk · 2 hesap</span></div><span class="pill p-free">Rakip yok</span></div>
+        <div class="row" tabindex="0"><span class="score s-warm">64</span><div><h4>Mesajlaşma uygulamasında yeni özellik</h4><span class="m">32 dk · resmi duyuru</span></div><span class="pill p-taken">Rakip A girdi</span></div>
+        <div class="row" tabindex="0"><span class="score s-warm">58</span><div><h4>Dizinin yeni sezon fragmanı</h4><span class="m">47 dk · YouTube trend</span></div><span class="pill p-taken">2 rakip</span></div>
+        <div class="row" tabindex="0"><span class="score s-ok">41</span><div><h4>Hafta sonu hava durumu</h4><span class="m">1 sa · yavaş</span></div><span class="pill p-free">Rakip yok</span></div>
+      </section>
+
+      <section class="detail" aria-label="Seçili konu">
+        <div class="d-head"><h2>Ünlü bir şarkıcı bu akşam için sürpriz ücretsiz konser duyurdu</h2><span class="score s-hot" style="padding:3px 10px">87</span></div>
+
+        <div class="facts">
+          <div class="fact"><div class="k">Yayılma</div><div class="v">4.200 etkileşim / 12 dk</div>
+            <svg class="spark" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="var(--accent)" stroke-width="2" points="0,26 20,24 40,22 60,18 80,12 100,7 120,2"/></svg></div>
+          <div class="fact"><div class="k">Kaynak</div><div class="v">Haber ajansı + 3 hesap</div><a href="#">Kaynakları gör</a></div>
+          <div class="fact"><div class="k">Rakipler</div><div class="v">Henüz kimse paylaşmadı</div><span style="color:var(--muted);font-size:12px">son kontrol 1 dk önce</span></div>
+        </div>
+
+        <div class="tabs"><span class="tab on">X</span><span class="tab">Instagram</span></div>
+        <div class="draft">Sürpriz geldi 🎤 [Şarkıcı] bu akşam ücretsiz konser veriyor. Saat ve yer 👇<span class="cnt">84 / 280</span></div>
+        <div class="btns"><button class="btn primary">Kopyala</button><button class="btn">Düzenle</button><button class="btn">Yeniden yaz</button><button class="btn">Paylaşıldı olarak işaretle</button><button class="btn">Atla</button></div>
+
+        <h3 class="sect-h">Rakipler · son 1 saat</h3>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Hesap</th><th class="num">Paylaşım</th><th class="num">Ort. etkileşim</th><th>En iyi içerik</th><th>Son paylaşım</th></tr></thead>
+          <tbody>
+            <tr><td>Rakip A</td><td class="num">6</td><td class="num">1.840</td><td>Uygulama özelliği</td><td>8 dk önce</td></tr>
+            <tr><td>Rakip B</td><td class="num">4</td><td class="num">2.310</td><td>Fragman videosu</td><td>21 dk önce</td></tr>
+            <tr><td><b>Pusholder</b></td><td class="num">3</td><td class="num">2.050</td><td>Bilet haberi</td><td>25 dk önce</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+    </div>
+  </main>
+</div>
