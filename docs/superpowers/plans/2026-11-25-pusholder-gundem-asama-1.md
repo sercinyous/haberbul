@@ -1,36 +1,44 @@
-# Pusholder Gündem Paneli — Aşama 1 Uygulama Planı
+# Haberbul — Aşama 1 Uygulama Planı (v2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Son dakika ve viral gündemi toplayan, puanlayan, Pusholder dilinde X/Instagram taslağı yazan ve bunları beyaz bir editör panelinde sunan servisi kurmak.
+**Goal:** Son dakika ve viral gündemi yakalayan, Pusholder kitlesine uygunluğunu puanlayan, Pusholder dilinde 3 açılı X ve Instagram taslakları yazan, güvenlik kilitleriyle editöre klavyeyle saniyeler içinde paylaştıran servisi kurmak.
 
-**Architecture:** İki süreç, tek Postgres veritabanı. `worker` süreci APScheduler ile kaynakları tarar, haberleri konulara birleştirir, puanlar ve Claude API ile taslak yazar. `web` süreci FastAPI + Jinja2 + HTMX ile paneli sunar, yeni konuları SSE ile canlı iter. Dış servisler (RSS, X API, Claude) ince istemci sınıflarının arkasındadır; testler sahte istemcilerle çalışır.
+**Architecture:** İki süreç, tek Postgres. `worker` (APScheduler) RSS'i paralel tarar, X'i bütçe paylarıyla ve tek OR-sorgularıyla okur, haberleri konulara birleştirir, Claude ile konuyu etiketler, puanlar ve taslak yazar. `web` (FastAPI + Jinja2 + HTMX) paneli sunar; tek bir async Postgres LISTEN dinleyicisi SSE ile tüm editörlere yayın yapar. Dış servisler ince istemci sınıflarının arkasında; testler sahte istemcilerle çalışır. X veya Claude anahtarı yoksa servis RSS ile çalışmaya devam eder.
 
-**Tech Stack:** Python 3.12+, FastAPI, Jinja2, HTMX 1.9.12 (CDN), SQLAlchemy 2.x, Alembic, Postgres 16, APScheduler 3.x, httpx, feedparser, rapidfuzz, anthropic SDK, pydantic-settings, pytest, respx, Docker Compose.
+**Tech Stack:** Python 3.12+, FastAPI, Jinja2, HTMX 1.9.12 (CDN), SQLAlchemy 2.x, Alembic, Postgres 16, psycopg 3 (async LISTEN), APScheduler 3.x, httpx, feedparser, rapidfuzz, anthropic SDK, pydantic-settings, pytest, respx, Docker Compose.
 
-**Spec:** `docs/superpowers/specs/2026-11-25-pusholder-gundem-paneli-design.md` (Aşama 1 = bölüm 10.5). Görsel referans: `docs/panel-mockup.html`.
+**Spec:** `docs/superpowers/specs/2026-11-25-pusholder-gundem-paneli-design.md` (bölüm 10–12). Görsel referans: `docs/panel-mockup.html`.
 
 ## Global Constraints
 
-- **Otomatik paylaşım yok.** Kodda X veya Instagram'a yazan (POST tweet, publish media) hiçbir çağrı olmaz.
-- Çıktı platformları yalnızca X ve Instagram. Taslak: X ≤ 280 karakter; Instagram = açıklama + hashtag listesi.
-- Her taslak en az bir kaynağa (`Item.url`) bağlıdır; kaynak metni kopyalanmaz, prompt "yeniden yaz, kaynakta olmayan iddia ekleme" der.
-- Tek kaynaklı konu: taslak `verified=False`; panelde "Doğrulanmadı — tek kaynak" etiketi, "kaynağı kontrol ettim" işaretlenene kadar Kopyala pasif. İkinci farklı kaynak gelince `verified=True`.
-- X API: yalnızca okuma; günlük bütçe tavanı `X_DAILY_BUDGET_USD` (varsayılan `5.0`), okuma başı maliyet `X_COST_PER_READ_USD` (varsayılan `0.005` — Pusholder'ın faturasıyla doğrulanmalı). Tavan dolunca X çağrısı yapılmaz, istisna fırlatılmaz.
-- X'i API dışından kazıma yok.
-- Güvenilir katman (tier 1): AA, DHA, İHA, Reuters, AP, AFP, BBC ve resmi X hesapları. Tier 2: büyük haber siteleri. Tier 3: gündem sinyalleri (Google Trends, Reddit).
-- Kırmızı son dakika uyarısı yalnızca tier 1 + son dakika işareti + yayın zamanı son 30 dakika içinde olan haberde.
-- Panel: tek ortak giriş (`PANEL_USER`, `PANEL_PASSWORD`), beyaz tek tema, Türkçe arayüz metinleri.
-- Claude model adı koda yazılmaz; `ANTHROPIC_MODEL` ortam değişkeninden okunur (zorunlu).
-- Sırlar (API anahtarları, şifreler) yalnızca ortam değişkeninde; repoya girmez. `.env` `.gitignore`'da.
+- **Otomatik paylaşım yok.** X/Instagram'a yazan hiçbir çağrı yok. X yalnızca okunur; X'i API dışından kazıma yok.
+- Çıktı yalnızca metin, yalnızca X ve Instagram.
+- Her taslak kaynağa bağlı; kaynak metni kopyalanmaz; kaynak künyesi (ör. `(AA)`) taslağın sonuna **kodla** eklenir ve 280 sınırına dahildir.
+- **Doğrulama** (`Topic.verified`): son `topic_window_hours` içinde, tier 1–2 kaynaklardan **en az 2 farklı kuruluş** (`Source.org`), en az biri tier 1 veya ikisi tier 2; özetleri ≥ %90 aynı olan iki haber tek kuruluş sayılır. Tier 3 doğrulamaya sayılmaz.
+- **Kopyala kuralları** (öncelik sırasıyla):
+  1. `banned` (aktif yayın yasağı kelimesi eşleşti) → Kopyala **kapalı**, kırmızı "YAYIN YASAĞI" şeridi; açılamaz.
+  2. Taslak benzerliği kaynak özetine > %70 → Kopyala kapalı, "Kaynağa çok benziyor — Yeniden yaz".
+  3. `sensitive` → bir tık "Hassas içerik — kontrol ettim" onayı sonrası açık.
+  4. Doğrulanmamış + tier 1 kaynak var → açık, yumuşak etiket "Tek kaynak (ajans)".
+  5. Doğrulanmamış + yalnızca tier 2–3 → bir tık "Kaynağı kontrol ettim" onayı sonrası açık.
+  6. Doğrulanmış → açık.
+  Onaylar `verified_by`/`sensitive_ack_by` + zaman olarak kaydedilir (giriş adındaki `editor_name`).
+- Son dakika uyarısı: tier 1 + son dakika işareti + **ilk görülme** son `breaking_max_age_min` (30) dk ve `published_at` 30 dk'dan eski değil. Tarihi olmayan haber son dakika sayılmaz.
+- X bütçesi: `x_daily_budget_usd` (5.0), `x_cost_per_read_usd` (0.005, faturayla doğrulanmalı). Pay: breaking %50, rakip %25, yayılma %25. DB'de **okuma sayısı** tutulur, USD türetilir. Tavan dolunca istisna yok, sessiz durma. Gün sınırı `Europe/Istanbul`.
+- Gün/saat hesapları her yerde `Europe/Istanbul`; DB'de UTC timestamptz.
+- Panel: tek ortak giriş + editör adı, beyaz tek tema, Türkçe metinler.
+- Claude model adları koda yazılmaz: `ANTHROPIC_MODEL` (taslak) ve `ANTHROPIC_FAST_MODEL` (etiketleme ve son dakika hızlı taslağı) ortam değişkeni. Yoksa ilgili adım atlanır, servis çalışır.
+- Sırlar yalnızca ortam değişkeninde; `.env` `.gitignore`'da.
+- Tek worker süreci çalışır (README'de yazılı).
 
 ## Review Focus
 
-1. **Bir RSS kaynağı çökük/bozuk/yavaş** → o kaynak loglanır ve atlanır, diğerleri taranmaya devam eder; zaman aşımı 10 sn. (Test: Task 2 `test_collect_all_skips_failing_source`)
-2. **İlk çalıştırmada eski haberler** → akıştaki eski kayıtlar son dakika alarmı üretmez (30 dk kuralı). (Test: Task 2 `test_old_item_is_not_breaking`)
-3. **X bütçesi gün ortasında biter** → X işleri sessizce durur, panel bütçe dolu gösterir, RSS hattı çalışır; gece yarısı (Europe/Istanbul) sıfırlanır. (Test: Task 4 `test_budget_exhausted_blocks_and_resets_next_day`)
-4. **Claude API hata/zaman aşımı veya 280'i aşan X metni** → konu taslaksız kalır ve `draft_error` dolar; panel "Taslak üretilemedi — Yeniden yaz"; uzun metin bir kez yeniden istenir, yine uzunsa kelime sınırında kesilip `x_truncated=True`. (Test: Task 6 `test_api_error_sets_draft_error`, `test_long_x_text_retried_then_truncated`)
-5. **İki editör aynı konuyu aynı anda sahiplenir** → ilk kazanır, ikinciye "Bu konu <ad> tarafından alındı" döner. (Test: Task 9 `test_second_claim_is_rejected`)
+1. **Bir RSS kaynağı çökük/yanlış karakter setli/yavaş** → atlanır, `last_error` dolar, diğerleri sürer; Türkçe karakterler bozulmaz. (Task 2: `test_collect_all_skips_failing_source`, `test_windows_1254_feed_decoded`)
+2. **AA haberini birebir kopyalayan site "ikinci kaynak" sayılır** → sayılmaz. (Task 3: `test_near_duplicate_summary_counts_as_one_org`)
+3. **X bütçesi biter / boş yanıt** → iş durur, rezerv iadesi doğru, gece yarısı İstanbul saatiyle sıfırlanır. (Task 4: `test_refund_unused_reads`, `test_budget_resets_at_istanbul_midnight`)
+4. **Taslakta kaynakta olmayan sayı/isim** → panelde sarı vurgulanır. (Task 7: `test_unsupported_number_flagged`)
+5. **Yayın yasağı kelimesi olan konu** → Kopyala hiçbir onayla açılmaz. (Task 10: `test_banned_topic_copy_never_enabled`)
 
 ---
 
@@ -38,348 +46,374 @@
 
 ```
 haberbul/
-  pyproject.toml  docker-compose.yml  Dockerfile  .env.example  .gitignore  README.md
-  alembic.ini  migrations/
+  pyproject.toml  docker-compose.yml  Dockerfile  .env.example  .gitignore  README.md  alembic.ini  migrations/
   gundem/
-    config.py        Settings (pydantic-settings)
-    db.py            engine, SessionLocal, Base, session_scope()
-    models.py        Source, Item, Topic, Draft, WatchAccount, RivalPost, XSpend, Claim
-    seeds.py         seeds/sources.yaml + watchlist.yaml → DB (idempotent)
-    sources/rss.py   RSS/Atom toplayıcı
-    sources/x.py     XClient (okuma + bütçe)
-    budget.py        XBudget
-    breaking.py      is_breaking()
-    topics.py        normalize_title(), assign_topic()
-    scoring.py       score_topic()
-    voice.py         Pusholder üslup örnekleri
-    drafting.py      DraftWriter (Claude)
-    rivals.py        rakip kapsama + istatistik
-    pipeline.py      run_breaking_cycle(), run_gundem_cycle(), run_x_cycle(), run_draft_cycle()
-    worker.py        APScheduler giriş noktası
-    web/app.py       FastAPI uygulaması, auth, rotalar
-    web/events.py    SSE yayıncısı (Postgres LISTEN/NOTIFY)
-    web/templates/   base.html, gundem.html, _topic_row.html, _topic_detail.html, rakipler.html, kaynaklar.html, izleme.html, ayarlar.html, login.html
-    web/static/      panel.css, panel.js, alert.mp3 (kısa bip, data üretilebilir)
-  seeds/sources.yaml  seeds/watchlist.yaml  seeds/voice_examples.yaml
-  tests/  conftest.py + test_*.py
+    config.py  db.py  models.py  seeds.py  timeutil.py
+    sources/rss.py  sources/x.py
+    budget.py  breaking.py  topics.py  safety.py  analysis.py  scoring.py
+    voice.py  drafting.py  factcheck.py  rivals.py  pipeline.py  worker.py
+    web/app.py  web/events.py  web/templates/*.html  web/static/{panel.css,panel.js,alert.mp3}
+  seeds/sources.yaml  seeds/watchlist.yaml  seeds/voice_examples.yaml  seeds/sensitive_keywords.yaml
+  tests/
 ```
 
 ---
 
-### Task 1: İskelet, ayarlar, veritabanı modelleri
+### Task 1: İskelet, ayarlar, modeller
 
-**Files:**
-- Create: `pyproject.toml`, `.gitignore`, `.env.example`, `gundem/__init__.py`, `gundem/config.py`, `gundem/db.py`, `gundem/models.py`, `alembic.ini`, `migrations/` (ilk revizyon), `tests/conftest.py`, `tests/test_models.py`
+**Files:** Create `pyproject.toml`, `.gitignore`, `.env.example`, `gundem/{__init__,config,db,models,timeutil}.py`, `alembic.ini`, `migrations/`, `tests/conftest.py`, `tests/test_models.py`
 
-**Interfaces:**
-- Produces:
-  - `Settings` alanları: `database_url: str`, `anthropic_api_key: str | None`, `anthropic_model: str | None`, `x_bearer_token: str | None`, `x_daily_budget_usd: float = 5.0`, `x_cost_per_read_usd: float = 0.005`, `draft_score_threshold: int = 60`, `hot_score: int = 70`, `breaking_max_age_min: int = 30`, `topic_window_hours: int = 6`, `topic_similarity: int = 80`, `panel_user: str`, `panel_password: str`, `session_secret: str`, `timezone: str = "Europe/Istanbul"`. `get_settings() -> Settings` (lru_cache).
-  - `session_scope()` context manager → `Session`.
-  - Modeller (tümünde `id` int PK, `created_at` timestamptz):
-    - `Source(name, kind: Literal["rss","x_account","trends"], url, tier: int 1|2|3, lang: "tr"|"en", is_breaking_feed: bool, enabled: bool, last_ok_at, last_error)`
-    - `Item(source_id FK, external_id, title, summary, url, published_at, lang, is_breaking: bool, topic_id FK nullable)`; unique `(source_id, external_id)`.
-    - `Topic(title, lang, first_seen_at, last_seen_at, is_breaking: bool, score: int=0, x_velocity: float=0, source_count: int=0, verified: bool=False, rival_covered_by: str|None, rival_covered_at, status: Literal["new","claimed","shared","skipped"]="new", claimed_by: str|None, claimed_at, draft_error: str|None)`
-    - `Draft(topic_id FK, x_text, ig_caption, ig_hashtags: list[str] (JSON), x_truncated: bool, created_at)` — konu başına birden çok (Yeniden yaz); en yenisi geçerli.
-    - `WatchAccount(handle, x_user_id, role: Literal["breaking","journalist","rival"], tier: int, last_tweet_id, enabled)`
-    - `RivalPost(watch_account_id FK, tweet_id unique, text, created_at_x, like_count, repost_count, reply_count, topic_id FK nullable)`
-    - `XSpend(day: date, reads: int, usd: float)`; unique `day`.
+**Interfaces — Produces:**
+- `Settings`: `database_url: str`, `anthropic_api_key: str|None=None`, `anthropic_model: str|None=None`, `anthropic_fast_model: str|None=None`, `x_bearer_token: str|None=None`, `x_daily_budget_usd: float=5.0`, `x_cost_per_read_usd: float=0.005`, `x_share_breaking: float=0.5`, `x_share_rival: float=0.25`, `x_share_velocity: float=0.25`, `draft_score_threshold: int=60`, `hot_score: int=70`, `list_min_score: int=50`, `breaking_max_age_min: int=30`, `topic_window_hours: int=6`, `topic_similarity: int=82`, `max_drafts_per_cycle: int=5`, `panel_user: str`, `panel_password: str`, `session_secret: str`, `telegram_bot_token: str|None=None`, `telegram_chat_id: str|None=None`, `timezone: str="Europe/Istanbul"`. `get_settings()` (lru_cache). `get_effective_settings(session) -> Settings` (Task 11'de `AppSetting` ile ezilir; burada yalnızca `get_settings()` döner).
+- `timeutil.now_utc() -> datetime`, `timeutil.local_today(tz: str) -> date`.
+- `session_scope()` context manager.
+- Modeller (hepsinde `id` PK, `created_at` timestamptz UTC):
+  - `Source(name, org, kind: "rss"|"trends", url, tier: 1|2|3, lang: "tr"|"en", is_breaking_feed: bool, enabled: bool, etag, last_modified, last_ok_at, last_error)`
+  - `Item(source_id FK, external_id, title, summary, url, published_at nullable, first_seen_at, lang, is_breaking, topic_id FK nullable)`; unique `(source_id, external_id)`.
+  - `Topic(title, lang, first_seen_at, last_seen_at, is_breaking, score:int=0, category:str|None, fit_score:int|None, x_queries: JSON list, x_velocity: float=0, x_velocity_prev: float=0, x_velocity_measured_at, trends_hit: bool=False, org_count:int=0, verified: bool=False, verified_by, verified_at, sensitive: bool=False, sensitive_ack_by, sensitive_ack_at, banned: bool=False, rival_handle, rival_at, rival_text, rival_eng_per_min: float=0, status: "new"|"claimed"|"shared"|"skipped"="new", claimed_by, claimed_at, shared_at, skip_reason, retracted: bool=False, draft_error)`
+  - `Draft(topic_id FK, kind: "fast"|"full", x_variants: JSON [{angle, text, truncated, flags:[str]}], ig: JSON {cover, caption, hashtags, slides:[str]}, similarity: float, created_at)` — en yenisi geçerli.
+  - `WatchAccount(handle, role: "breaking"|"rival"|"own", tier, enabled)`
+  - `RivalPost(handle, tweet_id unique, text, created_at_x, like_count, repost_count, reply_count, quote_count, topic_id FK nullable)`
+  - `XSpend(day: date, job: "breaking"|"rival"|"velocity"|"lookup", reads: int)`; unique `(day, job)`.
+  - `XCursor(job unique, since_id)`
+  - `BanKeyword(phrase, active: bool, note)`
+  - `AppSetting(key unique, value)`
+  - `Interaction(topic_id FK, editor, action: "view"|"copy"|"edit"|"verify"|"ack"|"claim"|"shared"|"skip"|"split"|"redraft", variant: int|None, text: str|None, reason: str|None, at)`
 
-- [ ] **Step 1: Test yaz** — `tests/conftest.py`: test veritabanı `TEST_DATABASE_URL` (yoksa `postgresql+psycopg://postgres@localhost/gundem_test`), her testte tablolar oluşturulur/silinir, `db` fixture'ı `Session` verir. `tests/test_models.py`:
-  - `test_settings_defaults`: `x_daily_budget_usd == 5.0`, `draft_score_threshold == 60`, `breaking_max_age_min == 30`.
-  - `test_item_unique_per_source`: aynı `(source_id, external_id)` ikinci ekleme `IntegrityError`.
-  - `test_topic_defaults`: yeni `Topic` → `status == "new"`, `verified is False`, `score == 0`.
-- [ ] **Step 2: Çalıştır, başarısız olduğunu gör** — `pytest tests/test_models.py -v` → FAIL (modül yok).
-- [ ] **Step 3: Uygula** — `config.py`, `db.py`, `models.py`; Alembic ilk revizyonu `alembic revision --autogenerate -m "initial"`.
-- [ ] **Step 4: Çalıştır** — `pytest tests/test_models.py -v` → PASS; `alembic upgrade head` boş DB'de hatasız.
-- [ ] **Step 5: Commit** — `git commit -m "Add project skeleton, settings and database models"`
+- [ ] **Step 1: Test yaz** — `conftest.py`: `TEST_DATABASE_URL` (varsayılan `postgresql+psycopg://postgres@localhost/gundem_test`), `PANEL_USER/PANEL_PASSWORD/SESSION_SECRET` test değerleri `monkeypatch.setenv`, her test tablo oluştur/sil, `db` fixture. Testler:
+  - `test_settings_defaults`: `x_daily_budget_usd == 5.0`, `x_share_breaking == 0.5`, `draft_score_threshold == 60`, `anthropic_model is None`.
+  - `test_item_unique_per_source` → `IntegrityError`.
+  - `test_topic_defaults`: `status == "new"`, `verified is False`, `banned is False`.
+  - `test_xspend_unique_day_job`.
+  - `test_local_today_istanbul`: `2026-11-25T21:30Z` → `date(2026,11,26)`.
+- [ ] **Step 2:** `pytest tests/test_models.py -v` → FAIL.
+- [ ] **Step 3:** Uygula; `alembic revision --autogenerate -m "initial"`.
+- [ ] **Step 4:** PASS; `alembic upgrade head` boş DB'de hatasız.
+- [ ] **Step 5:** `git commit -m "Add project skeleton, settings and database models"`
 
 ---
 
-### Task 2: RSS toplayıcı, kaynak tohumları, son dakika tespiti
+### Task 2: RSS toplayıcı ve son dakika tespiti
 
-**Files:**
-- Create: `gundem/sources/__init__.py`, `gundem/sources/rss.py`, `gundem/breaking.py`, `gundem/seeds.py`, `seeds/sources.yaml`, `tests/fixtures/aa_sondakika.xml`, `tests/fixtures/bbc_world.xml`, `tests/test_rss.py`, `tests/test_breaking.py`
+**Files:** Create `gundem/sources/{__init__,rss}.py`, `gundem/breaking.py`, `gundem/seeds.py`, `seeds/sources.yaml`, `tests/fixtures/*.xml`, `tests/test_rss.py`, `tests/test_breaking.py`
 
 **Interfaces:**
-- Consumes: `Source`, `Item`, `session_scope`, `get_settings`
+- Consumes: `Source`, `Item`, `timeutil`
 - Produces:
-  - `RawItem` (dataclass): `external_id: str, title: str, summary: str, url: str, published_at: datetime (UTC), lang: str`
-  - `fetch_rss(source: Source, client: httpx.Client) -> list[RawItem]` — zaman aşımı 10 sn; `external_id` = entry `id` yoksa `link`.
-  - `is_breaking(raw: RawItem, source: Source, now: datetime) -> bool`
-  - `collect(sources: list[Source], session: Session, client: httpx.Client, now: datetime) -> list[Item]` — yalnızca yeni Item'ları ekler ve döndürür; hata veren kaynakta `last_error` yazar, devam eder; başarılı kaynakta `last_ok_at=now`.
-  - `load_seeds(session: Session) -> None` — `seeds/*.yaml`'ı ada göre upsert eder.
+  - `RawItem(external_id, title, summary, url, published_at: datetime|None, lang)`
+  - `normalize_url(url) -> str` — `utm_*`, `fbclid`, `gclid` parametreleri ve `#` atılır.
+  - `fetch_rss(source, client) -> list[RawItem] | None` — `None` = 304 Not Modified. `If-None-Match`/`If-Modified-Since` gönderir, yanıttan `etag`/`last_modified` günceller. `User-Agent` tarayıcı benzeri. **`feedparser.parse(resp.content)`** (bayt). Zaman aşımı 10 sn. `published_at` gelecekteyse `None` yapılır. `external_id` = entry id, yoksa `normalize_url(link)`.
+  - `is_breaking(raw, source, first_seen: datetime, now: datetime, max_age_min: int) -> bool` — `tier == 1` ∧ `raw.published_at is not None` ∧ `now - published_at <= max_age_min` ∧ (`is_breaking_feed` ∨ başlıkta büyük/küçük harf duyarsız "son dakika" | "flaş" | "breaking" | "urgent").
+  - `collect(sources, session, client, now) -> list[Item]` — kaynakları `ThreadPoolExecutor(max_workers=8)` ile paralel çeker; yalnızca yeni Item'ları ekler (`first_seen_at=now`); hatada `last_error`, başarıda `last_ok_at`.
+  - `load_seeds(session)` — `seeds/*.yaml` ada göre upsert, idempotent.
 
-`is_breaking` kuralı: `source.tier == 1` VE `now - published_at <= breaking_max_age_min` VE (`source.is_breaking_feed` VEYA başlık büyük/küçük harf duyarsız `"son dakika"`, `"flaş"`, `"breaking"`, `"urgent"` içerir).
-
-`seeds/sources.yaml` en az: AA, DHA, İHA (tier 1, tr, son dakika akışı varsa `is_breaking_feed: true`), BBC World + BBC Türkçe (tier 1), Reuters/AP/AFP için açık akışı olanlar (yoksa `enabled: false` ve yorumda "abonelik gerekir"), 4–6 büyük Türk haber sitesi (tier 2), Google Trends TR (`kind: trends`, URL `https://trends.google.com/trending/rss?geo=TR`, tier 3), Reddit `r/Turkey` RSS (tier 3). Uygulayıcı her URL'yi bir kez `curl` ile doğrular; çalışmayanı `enabled: false` yapar ve `last_error` yorumu bırakır.
+`seeds/sources.yaml`: AA, DHA, İHA, BBC Türkçe, BBC World (tier 1, `org` alanı dolu, son dakika akışları `is_breaking_feed: true`), 4–6 büyük Türk haber sitesi (tier 2), Google Trends TR (`kind: trends`, `https://trends.google.com/trending/rss?geo=TR`, tier 3), Reddit `r/Turkey/.rss` (tier 3). Reuters/AP/AFP RSS'i yok → X üzerinden (Task 4). Uygulayıcı her URL'yi bir kez `curl` ile dener; çalışmayanı `enabled: false` + yorum.
 
 - [ ] **Step 1: Test yaz**
-  - `test_fetch_rss_parses_items`: `respx` ile `aa_sondakika.xml` → en az 1 `RawItem`, `title`, `url`, `published_at.tzinfo is not None`.
-  - `test_collect_dedupes`: aynı akış iki kez `collect` → ikinci çağrı `[]` döner.
-  - `test_collect_all_skips_failing_source`: biri 500, biri geçerli iki kaynak → geçerlinin Item'ları eklenir, hatalı kaynağın `last_error` dolu.
-  - `test_breaking_tier1_fresh_flagged`: tier 1, 5 dk önce, başlık "SON DAKİKA: ..." → `True`.
-  - `test_old_item_is_not_breaking`: aynı ama 45 dk önce → `False`.
-  - `test_tier2_never_breaking`: tier 2 + "son dakika" → `False`.
-  - `test_load_seeds_idempotent`: iki kez `load_seeds` → `Source` sayısı değişmez.
-- [ ] **Step 2: Çalıştır** — `pytest tests/test_rss.py tests/test_breaking.py -v` → FAIL.
-- [ ] **Step 3: Uygula** — feedparser ile ayrıştır; `published_parsed` yoksa `now` kullan.
-- [ ] **Step 4: Çalıştır** → PASS.
-- [ ] **Step 5: Commit** — `git commit -m "Add RSS collector, source seeds and breaking-news detection"`
+  - `test_fetch_rss_parses_items`; `test_windows_1254_feed_decoded` (ISO-8859-9 kodlu fixture, başlıkta "ğüşıöç" doğru).
+  - `test_not_modified_returns_none`: 304 → `None`, `etag` gönderildi.
+  - `test_normalize_url_strips_tracking`.
+  - `test_future_date_cleared`.
+  - `test_collect_dedupes`; `test_collect_all_skips_failing_source`.
+  - `test_breaking_tier1_fresh_flagged`; `test_old_item_is_not_breaking` (45 dk); `test_undated_item_not_breaking`; `test_tier2_never_breaking`.
+  - `test_load_seeds_idempotent`.
+- [ ] **Step 2:** FAIL. **Step 3:** Uygula. **Step 4:** PASS (`pytest tests/test_rss.py tests/test_breaking.py -v`).
+- [ ] **Step 5:** `git commit -m "Add parallel RSS collector and breaking-news detection"`
 
 ---
 
-### Task 3: Konu birleştirme
+### Task 3: Konu birleştirme ve doğrulama
 
-**Files:**
-- Create: `gundem/topics.py`, `tests/test_topics.py`
+**Files:** Create `gundem/topics.py`, `tests/test_topics.py`
 
 **Interfaces:**
 - Consumes: `Item`, `Topic`, `Source`
 - Produces:
-  - `normalize_title(title: str) -> str` — küçük harf (Türkçe: `İ→i`, `I→ı`), "son dakika", "flaş", "breaking" önekleri ve noktalama atılır, boşluk sadeleşir.
-  - `assign_topic(item: Item, session: Session, now: datetime) -> Topic` — son `topic_window_hours` içindeki, aynı dildeki konularla `rapidfuzz.fuzz.token_set_ratio(normalize(item.title), normalize(topic.title)) >= topic_similarity` olan en yüksek eşleşmeye bağlar; yoksa yeni konu açar. Bağladıktan sonra `topic.source_count` = farklı `source_id` sayısı; `source_count >= 2` → `verified=True`; `item.is_breaking` → `topic.is_breaking=True`; `last_seen_at=now`.
-
-Diller arası birleştirme (EN↔TR) Aşama 1'de yok; global haber ayrı konu olarak görünür.
+  - `normalize_title(title) -> str` — Türkçe küçük harf (`İ→i`, `I→ı`), "son dakika/flaş/breaking/video/foto" önekleri, noktalama atılır.
+  - `similar(a: str, b: str) -> int` — `rapidfuzz.fuzz.token_sort_ratio`; iki taraftan biri 3 kelimeden kısaysa `0`.
+  - `assign_topic(item, session, now) -> Topic | None` — tier 3 kaynaktan gelen Item **yeni konu açmaz**: eşleşen konu varsa ona bağlanır ve `trends_hit=True` (Trends kaynağıysa) yapar, yoksa `None` döner (Item konusuz kalır). Tier 1–2: `last_seen_at` son `topic_window_hours` içinde, aynı dildeki konular arasında `similar >= topic_similarity` en yüksek olana bağlanır, yoksa yeni konu. Ardından `recompute_verification(topic)`.
+  - `recompute_verification(topic, session) -> None` — tier 1–2 Item'ları `org`'a göre gruplar; iki kuruluşun özetleri `fuzz.ratio >= 90` ise tek kuruluş sayılır; `org_count` yazılır; Global Constraints'teki kurala göre `verified` (editör onayı `verified_by` varsa `True` kalır).
+  - `split_item(item_id, session, now) -> Topic` — Item'ı konusundan çıkarıp yeni konu açar; iki konuda da doğrulama yeniden hesaplanır.
 
 - [ ] **Step 1: Test yaz**
   - `test_normalize_strips_prefix_and_turkish_case`: `"SON DAKİKA: İstanbul'da Deprem!"` → `"istanbulda deprem"`.
-  - `test_similar_titles_merge`: "İstanbul'da 4.2 büyüklüğünde deprem" ve "SON DAKİKA İstanbul'da 4,2 büyüklüğünde deprem" (farklı kaynaklar) → aynı `Topic`, `source_count == 2`, `verified is True`.
-  - `test_same_source_twice_stays_unverified`: aynı kaynaktan iki benzer başlık → `source_count == 1`, `verified is False`.
-  - `test_outside_window_opens_new_topic`: 7 saat önceki konu → yeni konu.
-  - `test_different_language_not_merged`.
-- [ ] **Step 2: Çalıştır** — `pytest tests/test_topics.py -v` → FAIL.
-- [ ] **Step 3: Uygula.**
-- [ ] **Step 4: Çalıştır** → PASS.
-- [ ] **Step 5: Commit** — `git commit -m "Group items from different sources into topics"`
+  - `test_similar_titles_merge`: AA ve Hürriyet'ten "İstanbul'da 4.2 büyüklüğünde deprem" / "SON DAKİKA İstanbul'da 4,2 büyüklüğünde deprem meydana geldi" → aynı konu.
+  - `test_single_word_trend_does_not_swallow_topics`: Trends "deprem" → hiçbir konuya bağlanmaz, yeni konu açılmaz.
+  - `test_trend_boosts_matching_topic`: Trends "İstanbul'da 4.2 büyüklüğünde deprem" → `trends_hit is True`.
+  - `test_two_orgs_verify`: AA + Hürriyet farklı özet → `verified is True`, `org_count == 2`.
+  - `test_same_org_two_feeds_not_verified`: AA son dakika + AA genel → `org_count == 1`.
+  - `test_near_duplicate_summary_counts_as_one_org`: Hürriyet özeti AA'nın birebir kopyası → `verified is False`.
+  - `test_window_uses_last_seen`; `test_different_language_not_merged`; `test_split_item_creates_new_topic`.
+- [ ] **Step 2:** FAIL. **Step 3:** Uygula. **Step 4:** PASS.
+- [ ] **Step 5:** `git commit -m "Group items into topics with organization-based verification"`
 
 ---
 
-### Task 4: X istemcisi ve bütçe koruması
+### Task 4: X istemcisi ve bütçe payları
 
-**Files:**
-- Create: `gundem/budget.py`, `gundem/sources/x.py`, `gundem/seeds.py` (modify: watchlist), `seeds/watchlist.yaml`, `tests/test_budget.py`, `tests/test_x.py`
+**Files:** Create `gundem/budget.py`, `gundem/sources/x.py`, `seeds/watchlist.yaml`, `tests/test_budget.py`, `tests/test_x.py`
 
 **Interfaces:**
-- Consumes: `XSpend`, `WatchAccount`, `get_settings`
+- Consumes: `XSpend`, `XCursor`, `WatchAccount`, `Settings`, `timeutil.local_today`
 - Produces:
-  - `XBudget(session: Session, settings: Settings, today: date)`:
-    - `remaining_reads() -> int`
-    - `try_reserve(reads: int) -> bool` — kalan yetmiyorsa `False`, yetiyorsa `XSpend` satırını artırır ve `True`.
-    - `spent_usd() -> float`, `cap_usd() -> float`
-    - `poll_interval_seconds(base: int = 120) -> int` — kalan bütçe oranı `r`: `r > 0.5 → base`, `0.2 < r ≤ 0.5 → base*2`, `0 < r ≤ 0.2 → base*5`, `r == 0 → 0` (dur).
-  - `XTweet` (dataclass): `id, author_id, text, created_at, like_count, repost_count, reply_count, quote_count`
-  - `XClient(bearer: str, budget: XBudget, http: httpx.Client)`:
-    - `user_tweets(user_id: str, since_id: str | None, max_results: int = 10) -> list[XTweet]` — `GET /2/users/:id/tweets`, `tweet.fields=created_at,public_metrics`, `exclude=replies`.
-    - `search_recent(query: str, max_results: int = 25) -> list[XTweet]` — `GET /2/tweets/search/recent`, `-is:retweet lang:tr OR lang:en`.
-    - İstek öncesi `budget.try_reserve(max_results)`; `False` ise X'e gitmeden `[]` döner. Yanıtta dönen tweet sayısı rezervden azsa fark iade edilmez (basitlik; maliyet üst sınırı korunur).
-    - 429 → `[]` ve log; istisna fırlatmaz.
-  - `velocity(tweets: list[XTweet], now: datetime) -> float` — dakika başına toplam etkileşim (like+repost+reply+quote) / ilk tweet'ten bu yana geçen dakika (en az 1).
+  - `XBudget(session, settings, today: date)`:
+    - `cap_reads(job) -> int` = `floor(x_daily_budget_usd / x_cost_per_read_usd * share(job))`; `lookup` işi velocity payından yer.
+    - `used_reads(job) -> int`, `total_used_usd() -> float`, `total_cap_usd() -> float`
+    - `try_reserve(job, reads) -> bool` — satırı `SELECT ... FOR UPDATE` ile kilitler.
+    - `refund(job, reads) -> None`
+  - `XTweet(id, author_handle, text, created_at, like_count, repost_count, reply_count, quote_count)`
+  - `build_query(terms: list[str], from_handles: list[str] = []) -> str` — `(t1 OR t2 ...)` veya `(from:a OR from:b ...)`, sonuna ` -is:retweet -is:reply (lang:tr OR lang:en)`; boş liste → `ValueError`. Uzunluk > 512 → handle listesi bölünür (`build_queries` liste döndürür).
+  - `XClient(bearer, budget, http)`:
+    - `search_recent(job, query, since_id=None, max_results=10) -> tuple[list[XTweet], str|None]` — `GET https://api.x.com/2/tweets/search/recent`, `tweet.fields=created_at,public_metrics,author_id`, `expansions=author_id`, `user.fields=username`. Önce `try_reserve(job, max_results)`; `False` → `([], None)` X'e gitmeden. Yanıttan `meta.result_count` kadar kullanılmış sayılır, farkı `refund`. `newest_id` ikinci değer. 429/5xx → `([], None)`, log; tam rezerv iade.
+  - `engagement_per_min(tweets, now) -> float` — toplam (like+repost+reply+quote) / max(1, en eski tweet'ten bu yana dakika).
+  - `controversy(tweets) -> float` — (reply+quote) / max(1, like).
 
-`seeds/watchlist.yaml`: AA, DHA, İHA, Reuters, AP, AFP, BBC Breaking resmi hesapları (`role: breaking, tier: 1`), rakipler için yer tutucu kayıtlar (`role: rival`, `enabled: false`, yorumda "Pusholder doldurmalı"). `x_user_id` boşsa worker ilk çalıştırmada `GET /2/users/by/username/:handle` ile doldurur (bütçeden 1 okuma).
+`seeds/watchlist.yaml`: `Reuters`, `AP`, `AFP`, `AFPTurkce` (role breaking, tier 1); AA/DHA/İHA X hesapları **eklenmez** (RSS'ten geliyor). Rakipler `role: rival`, `enabled: false`, yorumda "Pusholder doldurmalı"; Pusholder kendi hesabı `role: own`.
 
 - [ ] **Step 1: Test yaz**
-  - `test_reserve_within_budget`: cap $5, maliyet $0.005 → `remaining_reads() == 1000`; `try_reserve(25)` → `True`, kalan 975.
-  - `test_budget_exhausted_blocks_and_resets_next_day`: 1000 rezerve → `try_reserve(1)` `False`; ertesi gün `XBudget(..., today+1)` → `True`.
-  - `test_poll_interval_scales`: kalan %60 → 120; %30 → 240; %10 → 600; %0 → 0.
-  - `test_client_skips_http_when_no_budget`: bütçe 0, `respx` rotası çağrılmamış olmalı, sonuç `[]`.
-  - `test_user_tweets_parses_metrics`: örnek JSON → `XTweet.like_count` doğru.
-  - `test_rate_limited_returns_empty`: 429 → `[]`.
-  - `test_velocity`: 3 tweet, toplam 600 etkileşim, 10 dk → `60.0`.
-- [ ] **Step 2: Çalıştır** — `pytest tests/test_budget.py tests/test_x.py -v` → FAIL.
-- [ ] **Step 3: Uygula** — `XBudget.try_reserve` satırı `SELECT ... FOR UPDATE` ile kilitler (iki işin aynı anda harcamasını önler).
-- [ ] **Step 4: Çalıştır** → PASS.
-- [ ] **Step 5: Commit** — `git commit -m "Add read-only X client with daily budget guard"`
+  - `test_cap_split`: $5 / $0.005 → breaking 500, rival 250, velocity 250.
+  - `test_reserve_and_refund_unused_reads`: reserve 10, `result_count=3` → `used_reads("breaking") == 3`.
+  - `test_budget_exhausted_blocks_without_http`: respx rotası hiç çağrılmaz.
+  - `test_budget_resets_at_istanbul_midnight`: `local_today` ertesi gün → yeniden rezerve edilebilir.
+  - `test_build_query_parenthesizes`: `build_query(["deprem","istanbul"])` → `"(deprem OR istanbul) -is:retweet -is:reply (lang:tr OR lang:en)"`.
+  - `test_search_parses_metrics_and_newest_id`; `test_rate_limited_refunds_all`.
+  - `test_engagement_per_min`: 3 tweet, 600 etkileşim, 10 dk → `60.0`.
+- [ ] **Step 2:** FAIL. **Step 3:** Uygula. **Step 4:** PASS.
+- [ ] **Step 5:** `git commit -m "Add read-only X client with per-job daily budgets"`
 
 ---
 
-### Task 5: Puanlama
+### Task 5: Güvenlik ve konu analizi
 
-**Files:**
-- Create: `gundem/scoring.py`, `tests/test_scoring.py`
+**Files:** Create `gundem/safety.py`, `gundem/analysis.py`, `seeds/sensitive_keywords.yaml`, `tests/test_safety.py`, `tests/test_analysis.py`
 
 **Interfaces:**
-- Consumes: `Topic`, `Item`, `Source`
-- Produces: `score_topic(topic: Topic, source_tiers: list[int], now: datetime) -> int`
-
-Başlangıç formülü (ağırlıklar modül sabitleri, Aşama 2'de veriyle ayarlanacak):
-
-```
-velocity_n = min(1, topic.x_velocity / 300)
-source_n   = min(1, sum({1:1.0, 2:0.6, 3:0.3}[t] for t in tiers) / 3)
-no_rival   = 1.0 if topic.rival_covered_by is None else 0.3
-recency    = max(0, 1 - age_minutes(topic.first_seen_at) / 180)
-score = floor(100 * (0.40*velocity_n + 0.25*source_n + 0.20*no_rival + 0.15*recency) + 0.5)   # yarım yukarı yuvarlama
-breaking konu: score = max(score, 90)
-```
+- Consumes: `Topic`, `Item`, `BanKeyword`, `normalize_title`
+- Produces:
+  - `apply_safety(topic, items, session) -> None` — başlık + özetlerde (normalize edilmiş) aktif `BanKeyword.phrase` geçerse `banned=True`; `seeds/sensitive_keywords.yaml` (terör, saldırı, patlama, deprem can kaybı, intihar, istismar, taciz, çocuk, reşit olmayan, cinsel, cenaze...) eşleşirse `sensitive=True`. Her yeni Item'da yeniden çalışır (yasak kelimesi sonradan eklenirse de; Task 9 her döngüde son 24 saatteki konulara uygular).
+  - `detect_retraction(item) -> bool` — başlık/özet "yalanladı" | "düzeltme" | "correction" | "retracted" | "asılsız" içerir.
+  - `TopicAnalyzer(client, model)`; `analyze(topic, items) -> dict | None` — tek kısa Claude çağrısı (`ANTHROPIC_FAST_MODEL`, `max_tokens=300`, `timeout=15`), yalnızca JSON: `{"category": one of ["unlu","futbol","para_fiyat","egitim_sinav","absurt_komik","ofke_tartisma","teknoloji_oyun","nostalji","siyaset","dunya","diger"], "fit": 0-10, "x_queries": [2-3 kısa anahtar kelime/hashtag öbeği], "sensitive": bool}`. Sonuç `topic.category/fit_score/x_queries` alanlarına; `sensitive` yalnızca `True` ise yazılır (anahtar kelime sonucunu kapatmaz). Hata → `None`, alanlar boş kalır.
 
 - [ ] **Step 1: Test yaz**
-  - `test_fresh_fast_uncovered_is_hot`: velocity 300, tiers [1,1,2], rakip yok, 0 dk → `97`.
-  - `test_rival_lowers_score`: aynı, rakip girmiş → `83`.
-  - `test_old_slow_single_tier3`: velocity 0, [3], rakip yok, 200 dk → `23` (22.5 yukarı yuvarlanır).
+  - `test_ban_keyword_marks_banned`; `test_inactive_ban_ignored`; `test_sensitive_keyword_marks_sensitive`.
+  - `test_detect_retraction`.
+  - `test_analyze_writes_fields` (sahte istemci); `test_analyze_invalid_category_falls_back_to_diger`; `test_analyze_error_returns_none`.
+- [ ] **Step 2:** FAIL. **Step 3:** Uygula. **Step 4:** PASS.
+- [ ] **Step 5:** `git commit -m "Add broadcast-ban and sensitive-topic flags and Claude topic analysis"`
+
+---
+
+### Task 6: Viral skor
+
+**Files:** Create `gundem/scoring.py`, `tests/test_scoring.py`
+
+**Interfaces:**
+- Consumes: `Topic`
+- Produces: `score_topic(topic, now) -> int`
+
+```
+age_min      = dakika(now - topic.first_seen_at)
+fit_n        = (topic.fit_score if not None else 5) / 10
+accel_n      = clamp((x_velocity - x_velocity_prev) / max(30, x_velocity_prev), 0, 1)
+velocity_n   = min(1, x_velocity / 300)
+spread_n     = min(1, org_count / 3)
+trends_n     = 1 if trends_hit else 0
+rival_n      = 0.5 if rival_handle is None else 0.5 + 0.5*min(1, rival_eng_per_min / 50)
+recency_n    = max(0, 1 - age_min / 180)
+raw = 0.30*fit_n + 0.15*velocity_n + 0.10*accel_n + 0.15*spread_n + 0.10*trends_n + 0.10*rival_n + 0.10*recency_n
+if not verified: raw *= 0.85
+score = floor(100*raw + 0.5)
+if is_breaking: score = max(score, 90)
+```
+
+Rakip girmesi ceza değil talep sinyalidir; panel rakibin metnini gösterip farklı açı önerir.
+
+- [ ] **Step 1: Test yaz**
+  - `test_hot_topic`: fit 10, velocity 300, prev 0, org 3, trends, rakip yok, 0 dk, verified → `floor(100*(0.30+0.15+0.10+0.15+0.10+0.05+0.10)+0.5) == 95`.
+  - `test_rival_traction_raises_score`: aynı konu, rakip 50 etk/dk → `100`.
+  - `test_unverified_discount`: ilk testin unverified hali → `floor(95*0.85... )` hesaplanmış değer `81`.
+  - `test_missing_fit_uses_5`.
   - `test_breaking_floor_90`.
-- [ ] **Step 2: Çalıştır** — FAIL. **Step 3: Uygula.** **Step 4: Çalıştır** — PASS.
-- [ ] **Step 5: Commit** — `git commit -m "Add initial viral score formula"`
+- [ ] **Step 2:** FAIL. **Step 3:** Uygula. **Step 4:** PASS.
+- [ ] **Step 5:** `git commit -m "Add viral score with fit, acceleration, trends and rival demand"`
 
 ---
 
-### Task 6: Pusholder dilinde taslak yazımı (Claude)
+### Task 7: Pusholder dilinde taslaklar
 
-**Files:**
-- Create: `gundem/voice.py`, `gundem/drafting.py`, `seeds/voice_examples.yaml`, `tests/test_drafting.py`
-
-**Interfaces:**
-- Consumes: `Topic`, `Item`, `Draft`, `get_settings`
-- Produces:
-  - `load_voice_examples() -> list[dict]` — `seeds/voice_examples.yaml` (`platform: x|instagram`, `text`, `engagement`). Başlangıçta 6–10 örnek yer tutucu; Pusholder kendi en iyi paylaşımlarıyla değiştirecek (README'de anlatılır).
-  - `build_messages(topic: Topic, items: list[Item], examples: list[dict]) -> tuple[str, list[dict]]` — (system, messages).
-  - `DraftWriter(client: anthropic.Anthropic, model: str)`
-    - `write(topic: Topic, items: list[Item], session: Session) -> Draft | None` — başarıda `Draft` ekler ve `topic.draft_error=None`; hata/zaman aşımında (`timeout=30`) `topic.draft_error` = kısa Türkçe mesaj, `None` döner.
-
-System prompt şunları sabitler (Türkçe): Pusholder'ın genç, hızlı, merak uyandıran ama abartmayan dili; örnekler ilham içindir, kopyalanmaz; **yalnızca verilen kaynaklardaki bilgileri kullan, ekleme yapma**; kaynak metni birebir kopyalama; global haberse Türkçeye çevir ve Türkiye'deki okur için neden önemli olduğunu bir cümleyle ekle; kesin olmayan bilgi için "iddia edildi / bildirildi" kullan. Çıktı yalnızca JSON: `{"x": str, "instagram": {"caption": str, "hashtags": [str]}}`.
-
-Kurallar: JSON ayrıştırılamazsa bir kez yeniden dene, yine olmazsa `draft_error`. `len(x) > 280` → bir kez "280 karakteri aşma" ek mesajıyla yeniden iste; yine uzunsa son boşlukta keserek ≤ 279 + "…" yap, `x_truncated=True`. Hashtag'ler `#` ile başlar, en fazla 8.
-
-- [ ] **Step 1: Test yaz** (sahte `anthropic` istemcisi: `messages.create` sırayla verilen yanıtları döndürür)
-  - `test_build_messages_includes_sources_and_rule`: system içinde "ekleme yapma" geçer; user mesajında her `item.url` ve `item.title` geçer.
-  - `test_write_creates_draft`: geçerli JSON → `Draft.x_text`, `ig_hashtags` liste, `topic.draft_error is None`.
-  - `test_long_x_text_retried_then_truncated`: iki kez 300 karakter → `len(x_text) <= 280`, `x_truncated is True`, `create` 2 kez çağrıldı.
-  - `test_invalid_json_retried_once`: önce bozuk sonra geçerli → `Draft` oluşur.
-  - `test_api_error_sets_draft_error`: `anthropic.APITimeoutError` → `None`, `topic.draft_error` dolu.
-- [ ] **Step 2: Çalıştır** — FAIL. **Step 3: Uygula.** **Step 4: Çalıştır** — PASS.
-- [ ] **Step 5: Commit** — `git commit -m "Write X and Instagram drafts in Pusholder voice with Claude"`
-
----
-
-### Task 7: Rakip takibi
-
-**Files:**
-- Create: `gundem/rivals.py`, `tests/test_rivals.py`
+**Files:** Create `gundem/voice.py`, `gundem/drafting.py`, `gundem/factcheck.py`, `seeds/voice_examples.yaml`, `tests/test_drafting.py`, `tests/test_factcheck.py`
 
 **Interfaces:**
-- Consumes: `XClient.user_tweets`, `WatchAccount`, `RivalPost`, `Topic`, `normalize_title`
+- Consumes: `Topic`, `Item`, `Draft`
 - Produces:
-  - `ingest_rival_tweets(account: WatchAccount, tweets: list[XTweet], session: Session) -> list[RivalPost]` — yeni olanları ekler, `account.last_tweet_id` günceller.
-  - `match_rival_coverage(session: Session, now: datetime) -> int` — son `topic_window_hours` içindeki eşleşmemiş `RivalPost`'ları konulara `token_set_ratio >= topic_similarity - 10` ile bağlar; konuda `rival_covered_by` boşsa hesabın handle'ı ve zamanı yazılır. Bağlanan sayısını döndürür.
-  - `rival_stats(session: Session, since: datetime) -> list[dict]` — her rakip + Pusholder için `{"handle", "posts", "avg_engagement", "best_text", "last_post_at"}`. Pusholder kendi hesabı `WatchAccount(role="own")` olarak eklenir (rol Literal'ine `"own"` eklenir).
+  - `load_voice_examples() -> list[dict]` — `seeds/voice_examples.yaml` (`platform`, `angle`, `text`, `approved_by`); editör onaylı örnekler (ham etkileşime göre değil). Başlangıçta 6–10 yer tutucu.
+  - `source_credit(items) -> str` — en yüksek tier'lı kuruluşun kısa adı, `"(AA)"` biçiminde.
+  - `factcheck(text, source_text) -> list[str]` — taslaktaki sayılar (`\d+([.,]\d+)?`) ve büyük harfle başlayan, cümle başı olmayan kelimeler kaynak metinde (normalize) yoksa listeye girer.
+  - `source_similarity(text, source_text) -> float` — `fuzz.partial_ratio / 100`.
+  - `DraftWriter(client, model, fast_model)`:
+    - `write_fast(topic, items, session) -> Draft | None` — yalnızca son dakika için; `fast_model`, tek X metni (`angle: "haber"`), `timeout=15`, `kind="fast"`.
+    - `write(topic, items, session, tone: str|None = None) -> Draft | None` — `model`, `timeout=40`, `kind="full"`; `tone in (None,"kisa","esprili","ciddi")`.
+
+Prompt (system, Türkçe) sabitleri: genç, hızlı, merak uyandıran ama abartmayan Pusholder dili; örnekler ilham, kopya değil; **yalnızca verilen kaynak bilgisi, ekleme yok**; kaynak cümlesini kopyalama; global haberi Türkçeye çevir, Türkiye'deki okur için neden önemli olduğunu kaynakta dayanağı varsa söyle; kesin olmayan için "bildirildi/iddia edildi"; ilk cümle tek başına zaman akışında çalışmalı; X metni 120–200 karakter hedef. **Yasak kalıplar:** "ŞOK", "inanamayacaksınız", "dikkat çekti", "gündem oldu", "işte detaylar", tamamı büyük harf başlık, art arda emoji, can kaybı haberinde emoji/ünlem. **Hassas kurallar:** mağdur, çocuk, şüpheli kimliği kaynağın ötesinde verilmez; terör örgütü açıklaması alıntılanmaz; can kaybı yalnızca resmi atıfla (AFAD, valilik); intihar yöntemi yok; kişi/örgüt adlı hashtag yok.
+Çıktı JSON: `{"x":[{"angle":"haber","text":...},{"angle":"merak","text":...},{"angle":"sana_etkisi_ya_da_soru","text":...}],"instagram":{"cover":"4-7 kelime","caption":...,"hashtags":[...≤8],"slides":[3-5 kısa metin]}}`.
+
+Kod tarafı kurallar: her X varyantına `" " + source_credit` eklenir; toplam > 280 → bir kez "kısalt" ek mesajıyla yeniden istenir, hâlâ uzunsa metin kelime sınırında kesilir (`…` + künye ≤ 280), `truncated=True`. Her varyanta `flags = factcheck(...)`. `Draft.similarity = max(source_similarity(v.text))`. JSON bozuksa bir kez yeniden; olmazsa `topic.draft_error`. API hatası/zaman aşımı → `topic.draft_error = "Taslak üretilemedi"`, `None`.
 
 - [ ] **Step 1: Test yaz**
-  - `test_ingest_skips_known_tweets`.
-  - `test_rival_tweet_marks_topic_covered`: konu "Final maçı biletleri satışa çıktı", rakip tweet "Final maçının biletleri satışta! Fiyatlar..." → `rival_covered_by == "rakip_a"`.
-  - `test_first_rival_wins`: iki rakip → ilk zaman damgalı kalır.
-  - `test_rival_stats_avg`: 2 tweet (100 ve 300 etkileşim) → `avg_engagement == 200`.
-- [ ] **Step 2–4:** FAIL → uygula → PASS (`pytest tests/test_rivals.py -v`).
-- [ ] **Step 5: Commit** — `git commit -m "Track rival X accounts and mark topics they covered"`
+  - `test_build_messages_has_sources_and_rules`: system'de "ekleme yok" ve "ŞOK" (yasak listesi) geçer; user'da her `item.url`.
+  - `test_write_creates_three_variants_with_credit`: her varyant `"(AA)"` ile biter, `len <= 280`.
+  - `test_long_variant_retried_then_truncated`.
+  - `test_invalid_json_retried_once`; `test_api_error_sets_draft_error`.
+  - `test_fast_draft_single_variant`.
+  - `test_tone_passed_to_prompt`: `tone="esprili"` → user mesajında "daha esprili".
+  - `test_unsupported_number_flagged`: kaynak "2 kişi yaralandı", taslak "3 ölü" → flags `["3"]`.
+  - `test_supported_name_not_flagged`.
+  - `test_similarity_high_for_copied_text`: taslak = kaynak cümlesi → `> 0.9`.
+- [ ] **Step 2:** FAIL. **Step 3:** Uygula. **Step 4:** PASS.
+- [ ] **Step 5:** `git commit -m "Write three-angle X and Instagram drafts with fact and copy checks"`
 
 ---
 
-### Task 8: İş hattı ve zamanlayıcı
+### Task 8: Rakip takibi
 
-**Files:**
-- Create: `gundem/pipeline.py`, `gundem/worker.py`, `tests/test_pipeline.py`
+**Files:** Create `gundem/rivals.py`, `tests/test_rivals.py`
 
 **Interfaces:**
-- Consumes: Task 2–7'nin tüm `Produces` öğeleri
+- Consumes: `XClient.search_recent`, `build_queries`, `XCursor`, `RivalPost`, `Topic`, `similar`
 - Produces:
-  - `run_breaking_cycle(deps: Deps, now) -> list[Topic]` — tier 1 kaynakları toplar, `assign_topic`, puanlar; yeni son dakika konularını döndürür ve `pg_notify('gundem', json{"type":"breaking","topic_id"})`.
-  - `run_gundem_cycle(deps, now) -> int` — tier 2–3 kaynaklar; yeni/güncellenen konu sayısı; her güncellemede `pg_notify('gundem', {"type":"topic","topic_id"})`.
-  - `run_x_cycle(deps, now) -> None` — izleme listesi (`user_tweets`), rakip eşleme; ardından skoru ≥ 40 olup `x_velocity` son 15 dk'da ölçülmemiş en fazla 5 aday konu için `search_recent(normalize_title(...) ilk 6 kelime)` → `x_velocity`; yeniden puanlar.
-  - `run_draft_cycle(deps, now) -> int` — `is_breaking` VEYA `score >= draft_score_threshold` olup taslağı olmayan ve `draft_error` boş konular için `DraftWriter.write`; ardından `pg_notify(..."draft")`.
-  - `Deps` (dataclass): `session_factory, http: httpx.Client, x: XClient | None, writer: DraftWriter | None, settings`. `x`/`writer` `None` ise ilgili adımlar atlanır (anahtar yoksa servis yine RSS ile çalışır).
-  - `worker.main()` — `load_seeds`, ardından APScheduler: breaking 90 sn, gündem 300 sn, draft 60 sn, x döngüsü her çalışmadan sonra `XBudget.poll_interval_seconds()` ile kendini yeniden planlar (0 ise ertesi gün 00:01 Europe/Istanbul). Her iş `max_instances=1`, istisnalar loglanır, zamanlayıcı ölmez.
+  - `poll_rivals(x, session, now) -> int` — etkin `rival` + `own` handle'ları için `build_queries(from_handles=...)`, `job="rival"`, `XCursor("rival").since_id`, `max_results=10`; yeni tweet'ler `RivalPost`; cursor güncellenir. Eklenen sayıyı döndürür.
+  - `match_rival_coverage(session, now) -> int` — eşleşmemiş rakip tweet'leri `similar >= topic_similarity - 7` ile konulara bağlar; konuda `rival_handle` boşsa handle, zaman, metin ve `engagement_per_min([tweet], now)` yazılır. Pusholder (`own`) tweet'leri eşleşen konuyu `shared` yapmaz, yalnızca bağlar.
+  - `rival_stats(session, since) -> list[dict]` — `{"handle","posts","avg_engagement","best_text","last_post_at"}`, `own` dahil.
 
-- [ ] **Step 1: Test yaz** (respx RSS + sahte XClient + sahte DraftWriter)
-  - `test_breaking_cycle_creates_breaking_topic_and_notifies`.
-  - `test_draft_cycle_only_above_threshold_or_breaking`: skor 50 konu taslaksız kalır, skor 65 ve breaking konular taslak alır.
-  - `test_cycle_runs_without_x_and_claude_keys`: `x=None, writer=None` → hata yok, konular oluşur.
-  - `test_x_cycle_limits_candidates_to_5`.
-- [ ] **Step 2–4:** FAIL → uygula → PASS (`pytest tests/test_pipeline.py -v`).
-- [ ] **Step 5: Commit** — `git commit -m "Wire collection, scoring and drafting into scheduled jobs"`
+- [ ] **Step 1: Test yaz** — `test_poll_uses_single_or_query`, `test_poll_updates_cursor`, `test_rival_tweet_marks_topic`, `test_first_rival_wins`, `test_rival_stats_avg` (100 ve 300 → 200).
+- [ ] **Step 2:** FAIL. **Step 3:** Uygula. **Step 4:** PASS.
+- [ ] **Step 5:** `git commit -m "Track rival X accounts with one combined query"`
 
 ---
 
-### Task 9: Panel — giriş, Gündem sayfası, konu işlemleri
+### Task 9: İş hattı ve zamanlayıcı
 
-**Files:**
-- Create: `gundem/web/__init__.py`, `gundem/web/app.py`, `gundem/web/templates/{base,login,gundem,_topic_row,_topic_detail}.html`, `gundem/web/static/panel.css`, `tests/test_web.py`
+**Files:** Create `gundem/pipeline.py`, `gundem/worker.py`, `tests/test_pipeline.py`
 
 **Interfaces:**
-- Consumes: modeller, `rival_stats`, `XBudget`, `DraftWriter` (Yeniden yaz için)
-- Produces (rotalar; tümü `/login` hariç oturum ister):
-  - `GET /login`, `POST /login` (form: `user`, `password`, `editor_name`) → imzalı çerez (`itsdangerous`, `session_secret`); `editor_name` sahiplenmede görünen ad.
-  - `GET /` → Gündem: özet şeridi (sıcak konu = son 1 saatte `score >= hot_score`, bekleyen taslak = `status in (new, claimed)` ve taslaklı, rakipten önce girilen = bugün `shared` olup `rival_covered_at` boş veya paylaşımdan sonra, X bütçesi `spent/cap`), son dakika şeridi, sol liste (son 24 saat, `status != skipped`, `is_breaking desc, score desc`), filtreler `?f=all|hot|norival`, ilk konunun detayı.
-  - `GET /topics/{id}` → `_topic_detail.html` parçası (HTMX).
-  - `POST /topics/{id}/claim` → başarı 200; başkası almışsa 409 + "Bu konu {ad} tarafından alındı". Koşullu güncelleme: `UPDATE topic SET status='claimed', claimed_by=:me WHERE id=:id AND (claimed_by IS NULL OR claimed_by=:me)`.
-  - `POST /topics/{id}/verify` → panelde "kaynağı kontrol ettim" (konu `verified=True`).
-  - `POST /topics/{id}/shared` → `status="shared"`.
-  - `POST /topics/{id}/skip` → `status="skipped"`.
-  - `POST /topics/{id}/redraft` → `DraftWriter.write`; yeni taslakla detay parçası.
-  - `GET /health` → `{"db": "ok"}` (oturumsuz).
+- Consumes: Task 2–8 `Produces`
+- Produces:
+  - `Deps(session_factory, http, x: XClient|None, analyzer: TopicAnalyzer|None, writer: DraftWriter|None, notifier: Callable[[Topic, Draft|None], None]|None, settings)`
+  - `notify(session, type: str, topic_id: int)` — `SELECT pg_notify('gundem', json)`; commit sonrası teslim edilir.
+  - `run_breaking_cycle(deps, now) -> list[Topic]` — tier 1 RSS kaynakları; `assign_topic`, `apply_safety`, `detect_retraction` (paylaşılmış konuda `retracted=True` + `notify("retraction")`); yeni son dakika konusu için hemen `writer.write_fast` ve `notify("breaking")`, `notifier` varsa çağrılır.
+  - `run_x_breaking_cycle(deps, now)` — `watchlist role=breaking` için `search_recent(job="breaking", since_id=XCursor("breaking"))`; her tweet bir `Item` olur (kaynak: o handle için otomatik oluşturulan `Source(kind="rss", url="x:"+handle, tier=1, org=handle)`), aynı akıştan geçer.
+  - `run_gundem_cycle(deps, now) -> int` — tier 2–3 RSS.
+  - `run_rival_cycle(deps, now)` — `poll_rivals`, `match_rival_coverage`.
+  - `run_velocity_cycle(deps, now)` — `score >= draft_score_threshold`, son dakika değil, `x_queries` dolu, `x_velocity_measured_at` boş veya 30 dk'dan eski en fazla 3 konu; `search_recent(job="velocity", build_query(topic.x_queries), max_results=10)`; `x_velocity_prev = x_velocity`, yeni `x_velocity`.
+  - `run_analysis_and_score_cycle(deps, now)` — analiz edilmemiş tier 1–2 konular (en fazla 10/döngü, son dakika önce) için `analyzer.analyze`; son 24 saatteki tüm aktif konular `apply_safety` + `score_topic` ile yeniden puanlanır (zamanla düşüş); değişen skor `notify("topic")`.
+  - `run_draft_cycle(deps, now) -> int` — sıra: son dakika (full taslağı yok) → skora göre; şart: `score >= draft_score_threshold` ∨ `is_breaking`, `banned` değil, `draft_error` boş; döngü başı en fazla `max_drafts_per_cycle`; `notify("draft")`.
+  - `worker.main()` — `load_seeds`; `Deps` kurulur (anahtar yoksa ilgili alan `None`); APScheduler aralıkları: breaking RSS 60 sn, X breaking 90 sn, gündem RSS 300 sn, rakip 900 sn, velocity 600 sn, analiz+skor 60 sn, draft 30 sn. Hepsi `max_instances=1`, `coalesce=True`; her iş gövdesi try/except + log. `get_effective_settings` her döngüde okunur.
 
-Görsel: `docs/panel-mockup.html` v2'nin CSS'i `panel.css`'e taşınır; yerleşim, metinler ve sınıf adları oradan. Kopyala butonu `navigator.clipboard.writeText`, başarısızsa metni seçer. Tek kaynaklı konuda Kopyala `disabled` ve yanında "Doğrulanmadı — tek kaynak" etiketi + "Kaynağı kontrol ettim" butonu. `draft_error` varsa taslak yerinde "Taslak üretilemedi — Yeniden yaz". X metninin altında `n / 280` sayacı.
+- [ ] **Step 1: Test yaz** (respx RSS, sahte X/analyzer/writer/notifier)
+  - `test_breaking_cycle_fast_drafts_and_notifies`.
+  - `test_x_breaking_tweet_becomes_item`.
+  - `test_draft_cycle_breaking_first_and_capped`: 7 uygun konu, cap 5 → 5 taslak, son dakika dahil.
+  - `test_banned_topic_gets_no_draft`.
+  - `test_cycle_runs_without_keys`.
+  - `test_velocity_cycle_max_3_and_sets_prev`.
+  - `test_retraction_flags_shared_topic`.
+  - `test_rescore_decays_over_time`.
+- [ ] **Step 2:** FAIL. **Step 3:** Uygula. **Step 4:** PASS.
+- [ ] **Step 5:** `git commit -m "Wire collection, analysis, scoring and drafting into scheduled jobs"`
+
+---
+
+### Task 10: Panel — giriş, Gündem, konu işlemleri, klavye
+
+**Files:** Create `gundem/web/{__init__,app}.py`, `gundem/web/templates/{base,login,gundem,_topic_row,_topic_detail}.html`, `gundem/web/static/{panel.css,panel.js}`, `tests/test_web.py`
+
+**Interfaces:**
+- Consumes: modeller, `rival_stats`, `XBudget`, `DraftWriter`, `split_item`, `recompute_verification`
+- Produces (rotalar; `/login`, `/health` hariç oturumlu):
+  - `GET/POST /login` (`user`, `password`, `editor_name`) → `itsdangerous` imzalı çerez.
+  - `GET /` — özet şeridi (sıcak konu: son 1 saat `score >= hot_score`; bekleyen taslak; **kaynaktan kopyaya ortalama süre** bugün; X bütçesi kullanılan/tavan USD), son dakika şeridi, sol liste (son 6 saat, `score >= list_min_score` ∨ `is_breaking`, `status != skipped`; 3 saatten eski ve hiç 70'i geçmemiş olanlar "Eski" katlanır bölümde), filtreler `?f=all|hot|norival|rival`, ilk konunun detayı. `?partial=list` yalnızca listeyi döndürür.
+  - `GET /topics/{id}` — detay: başlık, skor, kategori; kutular: Yayılma (sayı + ivme), Kaynaklar (her Item linki + kuruluş + tier), Rakip (handle, süre, **rakibin metni**); "kaynaktan bu yana N dk"; X sekmesinde 3 varyant kartı (açı adı, metin, `n/280`, `flags` sarı vurgulu), Instagram sekmesinde kapak + açıklama + hashtag + slaytlar; kaynak özeti yan panelde. Kopyala durumu Global Constraints'teki kural tablosuna göre (`copy_state(topic, draft) -> Literal["open","soft_single","needs_verify","needs_ack","blocked_ban","blocked_similar"]` saf fonksiyon, `app.py` içinde).
+  - `POST /topics/{id}/claim` — koşullu UPDATE; başkasındaysa 409 "Bu konu {ad} tarafından alındı".
+  - `POST /topics/{id}/copy` (`variant`, `platform`) — `Interaction(copy)`; konu sahipsizse otomatik claim. Kopyalama tarayıcıda `navigator.clipboard`; bu uç yalnızca kayıt.
+  - `POST /topics/{id}/verify` → `verified=True`, `verified_by/at`. `POST /topics/{id}/ack` → `sensitive_ack_by/at`.
+  - `POST /topics/{id}/edit` (`variant`, `text`) → `Interaction(edit, text)`.
+  - `POST /topics/{id}/shared` → `status="shared"`, `shared_at`.
+  - `POST /topics/{id}/skip` (`reason in eski|ilgisiz|zaten_paylastik|yanlis_birlesmis`) → `status="skipped"`, `skip_reason`.
+  - `POST /topics/{id}/redraft` (`tone` opsiyonel) → yeni taslakla detay parçası.
+  - `POST /items/{id}/split` → `split_item`; liste yenilenir.
+  - `GET /health` → `{"db":"ok"}`.
+  - Tüm eylemler `Interaction` satırı yazar.
+
+`panel.js` klavye: `J/K` konu, `1/2/3` varyant seç, `C` seçili varyantı kopyala, `I` IG metnini (açıklama + hashtag) kopyala, `E` düzenle, `R` yeniden yaz, `S` paylaşıldı, `X` atla (tek tuşla neden: `1` eski `2` ilgisiz `3` zaten paylaştık `4` yanlış birleşmiş), `/` arama, `?` kısayol listesi. Kopyalama `navigator.clipboard.writeText` + başarısızsa metni seçme. Görsel: `docs/panel-mockup.html` v2 CSS'i ve yerleşimi.
 
 - [ ] **Step 1: Test yaz** (FastAPI `TestClient`)
-  - `test_requires_login`: `/` → 303 `/login`.
-  - `test_login_wrong_password_rejected`.
-  - `test_gundem_lists_breaking_first`.
-  - `test_second_claim_is_rejected`: editör A claim 200, editör B claim 409 ve gövdede "A".
-  - `test_unverified_copy_disabled`: tek kaynaklı konu detayında `disabled` ve "Doğrulanmadı" var; `/verify` sonrası yok.
-  - `test_skip_hides_topic`.
-  - `test_draft_error_shows_retry`.
-- [ ] **Step 2–4:** FAIL → uygula → PASS (`pytest tests/test_web.py -v`).
-- [ ] **Step 5: Commit** — `git commit -m "Add editor panel with login, topic list and topic actions"`
+  - `test_requires_login`; `test_login_wrong_password_rejected`.
+  - `test_list_breaking_first_and_hides_low_scores`.
+  - `test_second_claim_is_rejected`.
+  - `test_copy_state_matrix`: 6 durumun her biri için `copy_state` beklenen değer.
+  - `test_banned_topic_copy_never_enabled`: `verify` ve `ack` sonrası da `blocked_ban`.
+  - `test_soft_single_source_tier1_copy_open`.
+  - `test_copy_records_interaction_and_claims`.
+  - `test_skip_requires_valid_reason`.
+  - `test_flags_rendered_highlighted`: detayda `class="flag"` içinde `3`.
+  - `test_split_item_route`.
+- [ ] **Step 2:** FAIL. **Step 3:** Uygula. **Step 4:** PASS.
+- [ ] **Step 5:** `git commit -m "Add editor panel with keyboard workflow, copy locks and topic actions"`
 
 ---
 
-### Task 10: Canlı güncelleme, son dakika uyarısı, yönetim sayfaları
+### Task 11: Canlı güncelleme, uyarılar, yönetim sayfaları
 
-**Files:**
-- Create: `gundem/web/events.py`, `gundem/web/static/panel.js`, `gundem/web/static/alert.mp3`, `gundem/web/templates/{rakipler,kaynaklar,izleme,ayarlar}.html`, `tests/test_admin_pages.py`
-- Modify: `gundem/web/app.py`, `gundem/config.py` (ayarların DB'den okunması)
+**Files:** Create `gundem/web/events.py`, `gundem/web/static/alert.mp3`, `gundem/web/templates/{taslaklar,paylasilanlar,rakipler,kaynaklar,izleme,ayarlar}.html`, `tests/test_admin_pages.py`, `tests/test_events.py`; Modify `gundem/web/app.py`, `gundem/config.py`, `gundem/web/static/panel.js`
 
 **Interfaces:**
-- Consumes: `pg_notify('gundem', ...)` (Task 8), `rival_stats`
+- Consumes: `pg_notify('gundem')` (Task 9), `rival_stats`, `BanKeyword`, `AppSetting`
 - Produces:
-  - `GET /events` → SSE; Postgres `LISTEN gundem` mesajlarını `event: <type>\ndata: <json>` olarak iletir; 25 sn'de bir `: ping`.
-  - `panel.js`: `EventSource('/events')`; `topic`/`draft` → sol listeyi `htmx.ajax('GET', '/?partial=list')` ile yeniler; `breaking` → kırmızı şerit + `alert.mp3` (ses ilk kullanıcı tıklamasından sonra açılır; üstte "Sesli uyarıyı aç" butonu).
-  - `GET /taslaklar` → taslağı olan ve `status in (new, claimed)` konular, en yeni önce; `GET /paylasilanlar` → `status == shared`, en yeni önce. İkisi de `_topic_row.html` kullanır.
-  - `GET /rakipler` → `rival_stats(son 1 saat)` ve `(bugün)` tabloları.
-  - `GET/POST /kaynaklar` → kaynak listesi; ekle (ad, url, tier, dil, son dakika akışı mı), aç/kapat; `last_ok_at`/`last_error` görünür.
-  - `GET/POST /izleme` → izleme listesi; handle ekle (rol, tier), aç/kapat.
-  - `GET/POST /ayarlar` → `x_daily_budget_usd`, `x_cost_per_read_usd`, `draft_score_threshold`, `hot_score`. Değerler `AppSetting(key, value)` tablosunda (Task 1 modeline eklenir, Alembic revizyonu); `get_effective_settings(session) -> Settings` ortam değerini DB değeriyle ezer; worker her döngüde bunu kullanır.
+  - `EventHub` (`events.py`): uygulama açılışında tek async psycopg bağlantısıyla `LISTEN gundem`; her SSE istemcisi için `asyncio.Queue`; `GET /events` `event: <type>\ndata: <json>\n\n`, 20 sn'de `: ping`, başlıklar `Cache-Control: no-cache`, `X-Accel-Buffering: no`.
+  - `panel.js`: `EventSource('/events')`; `open` (yeniden bağlanma dahil) ve `topic|draft` → `?partial=list` yenile; `breaking` → kırmızı şerit, `alert.mp3` (ilk tıklamadan sonra; "Sesli uyarıyı aç" butonu), **tarayıcı bildirimi** (`Notification.requestPermission` butondan), sekme başlığında okunmamış sayısı `"(3) Gündem"`; `retraction` → kırmızı "Kaynak düzeltti — paylaşımı kontrol et" şeridi.
+  - `GET /taslaklar` (taslaklı, `new|claimed`), `GET /paylasilanlar` (`shared`, `retracted` olanlar kırmızı).
+  - `GET /rakipler` — `rival_stats` son 1 saat ve bugün (İstanbul).
+  - `GET/POST /kaynaklar` — ekle (ad, kuruluş, url, tier, dil, son dakika akışı), aç/kapat, `last_ok_at`/`last_error`.
+  - `GET/POST /izleme` — handle ekle (rol, tier), aç/kapat.
+  - `GET/POST /ayarlar` — `x_daily_budget_usd`, `x_cost_per_read_usd`, `x_share_*` (toplam 1.0 olmalı), `draft_score_threshold`, `hot_score`, `list_min_score`; **yayın yasağı kelimeleri** (ekle, pasifleştir, not). `get_effective_settings(session)` ortam değerini `AppSetting` ile ezer.
 
 - [ ] **Step 1: Test yaz**
-  - `test_add_source_then_listed`.
+  - `test_add_source_then_listed`; `test_toggle_watch_account`.
   - `test_taslaklar_and_paylasilanlar_filter_by_status`.
-  - `test_toggle_watch_account`.
-  - `test_settings_override_budget`: `/ayarlar` POST `x_daily_budget_usd=2` → `get_effective_settings(...).x_daily_budget_usd == 2.0`.
-  - `test_invalid_budget_rejected`: negatif değer → 400 ve Türkçe hata.
-  - `test_events_stream_relays_notify`: `pg_notify` sonrası SSE akışında `event: breaking` satırı (zaman aşımı 5 sn).
-- [ ] **Step 2–4:** FAIL → uygula → PASS (`pytest tests/test_admin_pages.py -v`).
-- [ ] **Step 5: Commit** — `git commit -m "Add live updates, breaking alert and admin pages"`
+  - `test_settings_override_budget`; `test_invalid_budget_rejected` (negatif → 400 Türkçe hata); `test_shares_must_sum_to_one`.
+  - `test_add_ban_keyword_flags_existing_topic_next_cycle` (Task 9 `run_analysis_and_score_cycle` çağrılarak).
+  - `test_events_stream_relays_notify` (`pg_notify` → akışta `event: breaking`, 5 sn zaman aşımı).
+- [ ] **Step 2:** FAIL. **Step 3:** Uygula. **Step 4:** PASS.
+- [ ] **Step 5:** `git commit -m "Add live updates, browser alerts and admin pages"`
 
 ---
 
-### Task 11: Dağıtım ve uçtan uca doğrulama
+### Task 12: Dağıtım ve uçtan uca doğrulama
 
-**Files:**
-- Create: `Dockerfile`, `docker-compose.yml`, `README.md`
-- Modify: `.env.example`
+**Files:** Create `Dockerfile`, `docker-compose.yml`, `README.md`; Modify `.env.example`
 
-**Interfaces:**
-- Produces: `docker compose up` ile `db` (postgres:16), `web` (uvicorn `gundem.web.app:app` :8000), `worker` (`python -m gundem.worker`); `web` başlarken `alembic upgrade head`.
+- `docker compose up`: `db` (postgres:16), `web` (`alembic upgrade head && uvicorn gundem.web.app:app --host 0.0.0.0 --port 8000`), `worker` (`python -m gundem.worker`, `replicas: 1`).
+- README (Türkçe): kurulum; her ortam değişkeni; X maliyet ayarının ilk faturayla doğrulanması; bütçe paylarının anlamı; `seeds/voice_examples.yaml`'ın editör onaylı en iyi 10–20 paylaşımla doldurulması; rakiplerin panelden eklenmesi; yayın yasağı listesinin kim tarafından nasıl güncelleneceği; tek worker kuralı; telif notu; Aşama 2 listesi.
 
-README (Türkçe): kurulum, `.env` değişkenleri (her biri ne işe yarar), X maliyet ayarının faturayla doğrulanması, `seeds/voice_examples.yaml`'ın Pusholder'ın en iyi 10–20 paylaşımıyla doldurulması, rakip hesaplarının `seeds/watchlist.yaml`'a veya panelden eklenmesi, Aşama 2'de neler geleceği. Telif notu: taslaklar kaynağı yeniden yazar, kaynak belirtilmeli.
-
-- [ ] **Step 1:** `pytest -q` → tüm testler PASS.
-- [ ] **Step 2:** Yerel Postgres ile `alembic upgrade head && python -m gundem.worker` 3 dakika çalıştır (Claude/X anahtarı olmadan) → loglarda en az bir RSS kaynağından Item eklendiği ve hata veren kaynakların atlandığı görülür; `SELECT count(*) FROM topic` > 0.
-- [ ] **Step 3:** `uvicorn gundem.web.app:app` → Playwright ile giriş yap, Gündem sayfasının ekran görüntüsü; liste dolu, detay açılıyor, sağ üstte bütçe görünüyor.
-- [ ] **Step 4:** `docker compose config` hatasız.
-- [ ] **Step 5: Commit** — `git commit -m "Add Docker deployment and setup guide"`
+- [ ] **Step 1:** `pytest -q` → tümü PASS.
+- [ ] **Step 2:** Yerel Postgres, anahtarsız `python -m gundem.worker` 3 dk → RSS'ten Item ve konu oluşur (`SELECT count(*) FROM topic` > 0), hatalı kaynaklar loglanır.
+- [ ] **Step 3:** X anahtarı ortamdaysa: X breaking döngüsü bir kez çalışır, `x_spend` satırı ve `XCursor` güncellenir; harcanan okuma sayısı loglanır. Anahtar yoksa adım atlanır ve raporda belirtilir.
+- [ ] **Step 4:** `uvicorn` + Playwright: giriş, Gündem ekran görüntüsü, `J` ile konu değişimi, bir konuda `C` sonrası `interaction` satırı.
+- [ ] **Step 5:** `docker compose config` hatasız.
+- [ ] **Step 6:** `git commit -m "Add Docker deployment and setup guide"`
 
 ---
 
-## Kapsam notu (spec'ten bilinçli sapmalar, Aşama 2'ye)
+### Task 13 (Pusholder onaylarsa): Telegram uyarı botu
 
-- **Ekşi Sözlük gündemi:** Açık API/RSS yok; HTML kazıma kullanım şartları açısından riskli. Aşama 1'de yok; Pusholder onaylarsa eklenti olarak eklenir.
-- **YouTube trendleri:** YouTube Data API anahtarı gerektirir; Aşama 1'de yok.
-- **Diller arası konu birleştirme** (EN↔TR): yok.
+**Files:** Create `gundem/telegram.py`, `tests/test_telegram.py`; Modify `gundem/worker.py`
+
+- `TelegramNotifier(token, chat_id, http, panel_url)`; `__call__(topic, draft)` — son dakika ve `score >= 85` konular için `POST https://api.telegram.org/bot<token>/sendMessage`: başlık, skor, en iyi X varyantı, panel linki `panel_url + "/?t=" + id`. Aynı konu bir kez gönderilir. `TELEGRAM_BOT_TOKEN` yoksa `Deps.notifier=None`.
+- Testler: `test_sends_once_per_topic`, `test_below_85_not_sent`, `test_breaking_always_sent`.
+- `git commit -m "Add Telegram alerts for breaking and hot topics"`
+
+---
+
+## Aşama 2'ye kalanlar
+
+Performans sayfası ve paylaşım sonrası etkileşim takibi (X + Windsor IG), skor ağırlıklarının `Interaction` verisiyle ayarlanması, düzeltilmiş taslakların üslup havuzuna önerilmesi, paylaşım saati önerisi, editör tablosu ("rakipten önce girdik"), rakip Instagram (Meta onayı), Ekşi Sözlük (kullanım şartları), YouTube trendleri (API anahtarı), diller arası konu birleştirme.

@@ -157,3 +157,40 @@ Görsel taslak: https://claude.ai/artifact/WQWJ38vp8NnkVyMeXYMUqk (v2)
 3. **Ekip:** Tek ortak giriş (kullanıcı adı + şifre). Konu sahiplenme ("bu konu bende") ile çift paylaşım önlenir. Panel dışı uyarı kanalı v1'de yok.
 
 Durum: Pusholder "kur" talimatıyla onaylandı (2026-11-25), varsayılanlar yukarıdaki gibi.
+
+## 12. Alt ajan değerlendirmesi sonrası değişiklikler (2026-11-25)
+
+Viral strateji, mühendislik/X maliyeti ve haber güvenilirliği açılarından yapılan üç bağımsız değerlendirme sonrası. Bu bölüm önceki bölümlerle çelişirse bu bölüm geçerlidir.
+
+**X maliyeti:** Önceki tasarım (100–300 hesap, 1–2 dk'da bir sorgu) $5 tavanını gece yarısından ~30 dk sonra bitirir. Yeni tasarım:
+- Son dakikanın ana yolu RSS (AA, DHA, İHA, BBC; ETag ile 60 sn'de bir; X okuması harcamaz).
+- X yalnızca RSS'i olmayan kaynaklar (Reuters, AP, AFP) için: tek `(from:A OR from:B ...)` arama sorgusu, `since_id`, 90 sn'de bir.
+- Rakipler tek birleşik sorguyla 15 dk'da bir.
+- Yayılma ölçümü yalnızca skoru ≥ 60 olan, döngü başı en fazla 3 konu.
+- Bütçe iş başına paylara bölünür (son dakika %50, rakip %25, yayılma %25); kullanılmayan okuma iade edilir; gün sınırı İstanbul saati.
+- X fiyatlandırmasının ayrıntıları (boş yanıt faturalanıyor mu, aynı tweet 24 saatte bir mi sayılıyor) ilk faturayla doğrulanmalı.
+
+**Doğrulama ve kopyalama kilitleri:**
+- Doğrulama, tier 1–2 kaynaklardan en az 2 farklı **kuruluş** ister; birebir kopya haber (özet ≥ %90 aynı) tek kuruluş sayılır; Google Trends/Reddit sayılmaz.
+- Tek tier 1 ajans haberi Kopyala'yı kilitlemez, "Tek kaynak (ajans)" yumuşak etiketi taşır (son dakikada hız). Yalnızca tier 2–3 tek kaynakta bir tık onay gerekir.
+- **Yayın yasağı listesi** (Ayarlar, genel yayın yönetmeni doldurur): eşleşen konuda Kopyala hiçbir şekilde açılmaz.
+- **Hassas konu** (terör, afet can kaybı, çocuk, mağdur, intihar, cinsel suç): bir tık onay; prompt'a hassas yayın kuralları eklendi.
+- Kaynak künyesi (ör. "(AA)") taslağa kodla eklenir; kaynağa > %70 benzeyen taslakta Kopyala kapalı.
+- Taslakta kaynakta geçmeyen sayı/isim sarı vurgulanır.
+- Onaylayan editör adı ve zamanı kaydedilir. Paylaşılmış konuya "yalanladı/düzeltme" haberi gelirse kırmızı uyarı.
+
+**Viral motor:**
+- Claude ile hızlı konu analizi: kategori (ünlü, futbol, para/fiyat, sınav, absürt, tartışma, teknoloji, nostalji, siyaset, dünya), "20 yaşındaki biri paylaşır mı" 0–10 uygunluk puanı, X arama anahtar kelimeleri.
+- Skor; uygunluk, yayılma, ivme, kuruluş yayılımı, Google Trends çakışması ve rakip talebiyle hesaplanır. Rakibin girmesi ceza değil talep sinyalidir; panel rakibin metnini gösterir.
+- Her konu için 3 açılı X taslağı (haber / merak / sana etkisi ya da soru) ve Instagram için kapak başlığı + açıklama + hashtag + karusel metinleri. Yasak kalıp listesi (ŞOK, "dikkat çekti", "işte detaylar" vb.).
+- Son dakikada hızlı model ile tek X taslağı saniyeler içinde; tam taslak ardından.
+- "Yeniden yaz: kısa / esprili / ciddi".
+- Gürültü azaltma: Trends/Reddit tek başına konu açmaz, mevcut konuyu güçlendirir; liste varsayılan skor 50+ ve son 6 saat; "yanlış birleşmiş, ayır" butonu.
+
+**Editör kullanımı:**
+- Klavyeyle çalışma (J/K, 1/2/3, C, I, E, R, S, X, /, ?), kopyalamada otomatik sahiplenme, tek tuşla atlama nedeni.
+- Tarayıcı bildirimi + sekme başlığında sayaç + ses.
+- Ana ölçüt: kaynaktan kopyaya geçen süre (özet şeridinde).
+- Her etkileşim (kopyalanan varyant, düzenlenmiş metin, atlama nedeni) kaydedilir; Aşama 2'deki öğrenmenin verisi.
+
+**Önerilen, Pusholder onayı bekleyen:** Telegram uyarı botu (son dakika ve 85+ konular, en iyi varyant + panel linki). Bölüm 11.3'teki "panel dışı uyarı yok" varsayılanını değiştirir.
