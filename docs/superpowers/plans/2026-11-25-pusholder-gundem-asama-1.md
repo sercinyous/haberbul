@@ -37,7 +37,7 @@
 ## Dosya yapısı
 
 ```
-pusholder-gundem/
+haberbul/
   pyproject.toml  docker-compose.yml  Dockerfile  .env.example  .gitignore  README.md
   alembic.ini  migrations/
   gundem/
