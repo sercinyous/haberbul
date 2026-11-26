@@ -1,0 +1,36 @@
+# Pusholder'ın onaylı en iyi paylaşımlarıyla değiştirilecek.
+# Aşağıdakiler YER TUTUCUDUR: kurgusal içerik, gerçek kişi veya olay iddiası içermez.
+# Seçim ölçütü ham etkileşim değil, editör onayıdır (approved_by).
+# Alanlar: platform (x | instagram), angle (haber | merak | sana_etkisi_ya_da_soru), text, approved_by
+- platform: x
+  angle: haber
+  text: "Şehirdeki yeni metro hattı pazartesi sabah 06.00'da yolcu almaya başlıyor. Hat 9 durakla iki ilçeyi birbirine bağlayacak."
+  approved_by: yer_tutucu
+- platform: x
+  angle: merak
+  text: "Sabah servis kuyruğu tarihe mi karışıyor? Kampüse giden yeni otobüs hattı için tarih belli oldu, ilk sefer önümüzdeki hafta."
+  approved_by: yer_tutucu
+- platform: x
+  angle: sana_etkisi_ya_da_soru
+  text: "Üniversite yurt başvuruları yarın açılıyor ve son gün cuma. Başvuruyu ilk günden mi yaparsın, son dakikaya mı bırakırsın?"
+  approved_by: yer_tutucu
+- platform: x
+  angle: haber
+  text: "Sınav merkezi, ertelenen deneme sınavının yeni tarihini açıkladı: oturum 14 Aralık'ta yapılacak. Giriş belgeleri hafta sonu erişime açılacak."
+  approved_by: yer_tutucu
+- platform: x
+  angle: merak
+  text: "Bir kafe, menüsündeki fiyatları müşterinin seçtiği şarkıya göre belirlemeye başladığını duyurdu. Evet, gerçekten 🎵"
+  approved_by: yer_tutucu
+- platform: x
+  angle: sana_etkisi_ya_da_soru
+  text: "Şehir içi ulaşımda öğrenci kartı ücreti yeni yılda değişiyor, belediye yeni tarifeyi açıkladı. Aylık bütçende ne kadar fark edecek?"
+  approved_by: yer_tutucu
+- platform: instagram
+  angle: haber
+  text: "Kampüse yeni otobüs hattı geliyor. Belediyenin duyurusuna göre ilk sefer önümüzdeki pazartesi, hat 12 durakta duracak. Detaylar slaytlarda 👉"
+  approved_by: yer_tutucu
+- platform: instagram
+  angle: merak
+  text: "Kampüs kütüphanesi artık gece de açık. Sınav haftası boyunca salonlar sabaha kadar hizmet verecek, kart yeterli. Kaydır, saatleri gör."
+  approved_by: yer_tutucu
