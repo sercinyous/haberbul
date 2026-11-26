@@ -479,3 +479,109 @@ def test_guarded_job_logs_and_swallows_errors(caplog):
 
     guarded("boom", boom, deps=object())()
     assert "boom" in caplog.text and "kaboom" in caplog.text
+
+
+class FailingFastWriter(FakeWriter):
+    def write_fast(self, topic, items, session):
+        self.calls.append(("fast-failed", topic.id))
+        topic.draft_error = "Taslak üretilemedi"
+        return None
+
+
+@respx.mock
+def test_failed_fast_draft_does_not_block_full_draft(db, factory, http):
+    now = utcnow()
+    aa = add_source(db, "AA Son Dakika", "https://feed.test/aa", tier=1, breaking_feed=True)
+    db.commit()
+    respx.get(aa.url).respond(200, content=rss_xml([
+        ("Büyük şehirde elektrik kesintisi saatlerdir sürüyor", "aa-5", "Kesinti sürüyor.",
+         now - timedelta(minutes=2)),
+    ]))
+    writer = FailingFastWriter()
+    deps = make_deps(factory, http, writer=writer)
+    topics = run_breaking_cycle(deps, now)
+    assert writer.calls == [("fast-failed", topics[0].id)]
+    with factory() as s:
+        assert s.get(Topic, topics[0].id).draft_error is None
+
+    assert run_draft_cycle(deps, now) == 1
+    assert writer.calls[-1] == ("full", topics[0].id)
+
+
+class FlakyAnalyzer:
+    def __init__(self, fail=True):
+        self.fail = fail
+        self.calls = []
+
+    def analyze(self, topic, items):
+        self.calls.append(topic.id)
+        if self.fail:
+            return None
+        topic.category = "diger"
+        return {"category": "diger", "fit": 5, "x_queries": [], "sensitive": False}
+
+
+def test_failed_analysis_waits_15_minutes_then_retries(db, factory, http):
+    now = utcnow()
+    src = add_source(db, "AA", "https://feed.test/aa")
+    topic = add_topic(db, "Analizi patlayan konu", now, src)
+    db.commit()
+    analyzer = FlakyAnalyzer()
+    deps = make_deps(factory, http, analyzer=analyzer)
+
+    run_analysis_and_score_cycle(deps, now)
+    run_analysis_and_score_cycle(deps, now + timedelta(minutes=14))
+    assert analyzer.calls == [topic.id], "not retried within 15 minutes"
+
+    analyzer.fail = False
+    run_analysis_and_score_cycle(deps, now + timedelta(minutes=15))
+    assert analyzer.calls == [topic.id, topic.id]
+    assert topic.id not in deps.analysis_failures
+    with factory() as s:
+        assert s.get(Topic, topic.id).category == "diger"
+
+
+def test_analysis_skipped_after_3_failures(db, factory, http):
+    now = utcnow()
+    src = add_source(db, "AA", "https://feed.test/aa")
+    topic = add_topic(db, "Hep patlayan konu", now, src, last_seen_at=now + timedelta(hours=2))
+    db.commit()
+    analyzer = FlakyAnalyzer()
+    deps = make_deps(factory, http, analyzer=analyzer)
+    for step in range(5):
+        run_analysis_and_score_cycle(deps, now + timedelta(minutes=16 * step))
+    assert analyzer.calls == [topic.id] * 3
+
+
+def test_velocity_skips_dead_topics(db, factory, http):
+    now = utcnow()
+    live = add_topic(db, "Canlı konu", now, score=70, x_queries=["canli"])
+    dead = [
+        add_topic(db, "Paylaşılmış", now, score=99, x_queries=["a"], status="shared"),
+        add_topic(db, "Atlanmış", now, score=99, x_queries=["a"], status="skipped"),
+        add_topic(db, "Eski", now, score=99, x_queries=["a"], last_seen_at=now - timedelta(hours=7)),
+        add_topic(db, "Yasaklı", now, score=99, x_queries=["a"], banned=True),
+        add_topic(db, "Yalanlanmış", now, score=99, x_queries=["a"], retracted=True),
+    ]
+    db.commit()
+    x = FakeX(default=([], None))
+    run_velocity_cycle(make_deps(factory, http, x=x), now)
+    assert len(x.calls) == 1
+    with factory() as s:
+        assert s.get(Topic, live.id).x_velocity_measured_at == now
+        assert all(s.get(Topic, t.id).x_velocity_measured_at is None for t in dead)
+
+
+def test_draft_cycle_rechecks_ban_before_writing(db, factory, http, listener):
+    now = utcnow()
+    src = add_source(db, "AA", "https://feed.test/aa")
+    topic = add_topic(db, "Maden faciası soruşturmasında yeni gelişme", now, src, score=95)
+    db.commit()
+    db.add(BanKeyword(phrase="maden faciası"))
+    db.commit()
+    writer = FakeWriter()
+    assert run_draft_cycle(make_deps(factory, http, writer=writer), now) == 0
+    assert writer.calls == []
+    with factory() as s:
+        assert s.get(Topic, topic.id).banned
+    assert {"type": "topic", "topic_id": topic.id} in listener()

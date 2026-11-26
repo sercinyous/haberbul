@@ -9,11 +9,11 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import httpx
-from sqlalchemy import or_, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from gundem.analysis import TopicAnalyzer
@@ -38,6 +38,8 @@ VELOCITY_TOPICS_PER_CYCLE = 3
 VELOCITY_MAX_RESULTS = 10
 VELOCITY_REMEASURE = timedelta(minutes=30)
 ANALYSIS_PER_CYCLE = 10
+ANALYSIS_RETRY_AFTER = timedelta(minutes=15)
+ANALYSIS_MAX_FAILURES = 3
 RESCORE_WINDOW = timedelta(hours=24)
 ACTIVE_STATUSES = ("new", "claimed")
 X_TITLE_LEN = 200
@@ -55,6 +57,8 @@ class Deps:
     writer: DraftWriter | None
     notifier: Notifier | None
     settings: Settings
+    # In-process only: topic_id -> (failure count, last failure time) for Claude analysis.
+    analysis_failures: dict[int, tuple[int, datetime]] = field(default_factory=dict)
 
 
 def notify(session: Session, type: str, topic_id: int) -> None:
@@ -112,11 +116,16 @@ def _ingest_breaking(deps: Deps, session: Session, settings: Settings, items: li
     for topic in fresh:
         draft = None
         if deps.writer is not None and not topic.banned:
+            previous_error = topic.draft_error
             try:
                 draft = deps.writer.write_fast(topic, _topic_items(session, topic), session)
             except Exception:
                 log.exception("fast draft failed for topic %s", topic.id)
                 session.rollback()
+            if draft is None and topic.draft_error != previous_error:
+                # Only full-draft failures gate the draft cycle; a failed fast draft is just logged.
+                log.warning("fast draft failed for topic %s: %s", topic.id, topic.draft_error)
+                topic.draft_error = previous_error
         notify(session, "breaking", topic.id)
         session.commit()
         if deps.notifier is not None and not topic.banned:
@@ -258,17 +267,22 @@ def run_velocity_cycle(deps: Deps, now: datetime) -> None:
         settings = get_effective_settings(session)
         _refresh_x_budget(deps, settings, now)
         candidates = session.scalars(
-            select(Topic)
+            select(Topic.id)
             .where(
                 Topic.score >= settings.draft_score_threshold,
                 Topic.is_breaking.is_(False),
+                Topic.status.in_(ACTIVE_STATUSES),
+                Topic.banned.is_(False),
+                Topic.retracted.is_(False),
+                Topic.last_seen_at >= now - timedelta(hours=settings.topic_window_hours),
+                func.coalesce(func.json_array_length(Topic.x_queries), 0) > 0,
                 or_(Topic.x_velocity_measured_at.is_(None),
                     Topic.x_velocity_measured_at < now - VELOCITY_REMEASURE),
             )
             .order_by(Topic.score.desc(), Topic.id)
+            .limit(VELOCITY_TOPICS_PER_CYCLE)
         )
-        chosen = [t for t in candidates if t.x_queries][:VELOCITY_TOPICS_PER_CYCLE]
-        topic_ids = [t.id for t in chosen]
+        topic_ids = list(candidates)
         session.commit()
         for topic_id in topic_ids:
             topic = session.get(Topic, topic_id)
@@ -289,15 +303,26 @@ def run_velocity_cycle(deps: Deps, now: datetime) -> None:
             session.commit()
 
 
+def _analysis_blocked(deps: Deps, now: datetime) -> list[int]:
+    """Topics to skip: 15 minutes after a failed analysis, and for good after 3 failures."""
+    return [
+        topic_id
+        for topic_id, (count, failed_at) in deps.analysis_failures.items()
+        if count >= ANALYSIS_MAX_FAILURES or now - failed_at < ANALYSIS_RETRY_AFTER
+    ]
+
+
 def run_analysis_and_score_cycle(deps: Deps, now: datetime) -> None:
     """Analyze unanalyzed topics (breaking first), then rescore every active recent topic."""
     with deps.session_factory() as session:
         since = now - RESCORE_WINDOW
         if deps.analyzer is not None:
+            blocked = _analysis_blocked(deps, now)
             pending = list(session.scalars(
                 select(Topic.id)
                 .where(Topic.category.is_(None), Topic.last_seen_at >= since,
-                       Topic.status.in_(ACTIVE_STATUSES))
+                       Topic.status.in_(ACTIVE_STATUSES),
+                       Topic.id.not_in(blocked) if blocked else True)
                 .order_by(Topic.is_breaking.desc(), Topic.first_seen_at.desc(), Topic.id)
                 .limit(ANALYSIS_PER_CYCLE)
             ))
@@ -305,11 +330,17 @@ def run_analysis_and_score_cycle(deps: Deps, now: datetime) -> None:
             for topic_id in pending:
                 topic = session.get(Topic, topic_id)
                 try:
-                    deps.analyzer.analyze(topic, _topic_items(session, topic))
+                    result = deps.analyzer.analyze(topic, _topic_items(session, topic))
                     session.commit()
                 except Exception:
                     log.exception("analysis failed for topic %s", topic_id)
                     session.rollback()
+                    result = None
+                if result is None:
+                    count = deps.analysis_failures.get(topic_id, (0, now))[0] + 1
+                    deps.analysis_failures[topic_id] = (count, now)
+                else:
+                    deps.analysis_failures.pop(topic_id, None)
 
         topics = session.scalars(
             select(Topic)
@@ -353,7 +384,14 @@ def run_draft_cycle(deps: Deps, now: datetime) -> int:
         for topic_id in topic_ids:
             topic = session.get(Topic, topic_id)
             try:
-                draft = deps.writer.write(topic, _topic_items(session, topic), session)
+                items = _topic_items(session, topic)
+                # A ban keyword may have been added since the last rescore.
+                apply_safety(topic, items, session)
+                if topic.banned:
+                    notify(session, "topic", topic.id)
+                    session.commit()
+                    continue
+                draft = deps.writer.write(topic, items, session)
                 if draft is not None:
                     notify(session, "draft", topic.id)
                     written += 1
