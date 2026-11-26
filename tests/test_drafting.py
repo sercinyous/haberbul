@@ -22,7 +22,12 @@ class FakeClient:
     def __init__(self, *responses):
         self.responses = list(responses)
         self.calls = []
+        self.options = []
         self.messages = self
+
+    def with_options(self, **kwargs):
+        self.options.append(kwargs)
+        return self
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
@@ -32,7 +37,7 @@ class FakeClient:
         return SimpleNamespace(content=[SimpleNamespace(type="text", text=response)])
 
 
-def full_json(haber=HABER, merak=MERAK, soru=SORU):
+def full_json(haber=HABER, merak=MERAK, soru=SORU, caption=None, slides=None, cover=None):
     return json.dumps({
         "x": [
             {"angle": "haber", "text": haber},
@@ -40,10 +45,10 @@ def full_json(haber=HABER, merak=MERAK, soru=SORU):
             {"angle": "sana_etkisi_ya_da_soru", "text": soru},
         ],
         "instagram": {
-            "cover": "Yeni metro hattı yarın açılıyor",
-            "caption": "Merkezdeki yeni metro hattı yarın sabah ilk yolcularını alıyor.",
+            "cover": cover or "Yeni metro hattı yarın açılıyor",
+            "caption": caption or "Merkezdeki yeni metro hattı yarın sabah ilk yolcularını alıyor.",
             "hashtags": ["#metro", "#ulaşım"],
-            "slides": ["Yarın açılıyor", "12 durak", "İlk sefer 06.00"],
+            "slides": slides or ["Yarın açılıyor", "12 durak", "İlk sefer 06.00"],
         },
     }, ensure_ascii=False)
 
@@ -258,3 +263,66 @@ def test_draft_similarity_high_when_variant_copies_source(setup):
     client = FakeClient(full_json(merak=items[0].summary))
     draft = DraftWriter(client, "m", "f").write(topic, items, db)
     assert draft.similarity > 0.9
+
+
+def test_fast_draft_no_sdk_retries_and_long_text_truncated_in_one_call(setup):
+    db, topic, items = setup
+    client = FakeClient(fast_json("uzun " * 70), fast_json())
+    draft = DraftWriter(client, "m", "f").write_fast(topic, items, db)
+    assert len(client.calls) == 1
+    assert client.options == [{"max_retries": 0}]
+    assert draft.x_variants[0]["truncated"] is True
+    assert len(draft.x_variants[0]["text"]) <= 280
+
+
+def test_fast_draft_json_retried_at_most_once(setup):
+    db, topic, items = setup
+    client = FakeClient("bozuk", "yine bozuk", fast_json())
+    assert DraftWriter(client, "m", "f").write_fast(topic, items, db) is None
+    assert len(client.calls) == 2
+    assert topic.draft_error
+
+
+def test_full_draft_keeps_sdk_retries(setup):
+    db, topic, items = setup
+    client = FakeClient(full_json())
+    DraftWriter(client, "m", "f").write(topic, items, db)
+    assert client.options == []
+
+
+def test_similarity_catches_copied_sentence_plus_original_sentence(setup):
+    db, topic, items = setup
+    copied = items[0].summary + " Sabah trafiğinde nefes aldıracak bir gelişme olabilir, takipte kal."
+    client = FakeClient(full_json(merak=copied))
+    draft = DraftWriter(client, "m", "f").write(topic, items, db)
+    assert draft.similarity > 0.7
+
+
+def test_similarity_checks_instagram_slides(setup):
+    db, topic, items = setup
+    clean = DraftWriter(FakeClient(full_json()), "m", "f").write(topic, items, db).similarity
+    slides = ["Yarın açılıyor", items[1].summary, "İlk sefer 06.00"]
+    copied = DraftWriter(FakeClient(full_json(slides=slides)), "m", "f").write(topic, items, db).similarity
+    assert copied > 0.9 > clean
+
+
+def test_banned_phrase_flagged_in_variant_and_ig(setup):
+    db, topic, items = setup
+    client = FakeClient(full_json(
+        merak="Yeni metro hattının açılış tarihi sosyal medyada Gündem Oldu, ilk sefer yarın 06.00'da.",
+        caption="ŞOK: metro hattı yarın açılıyor.",
+        cover="YENİ METRO HATTI AÇILIYOR",
+    ))
+    draft = DraftWriter(client, "m", "f").write(topic, items, db)
+    assert "yasak kalıp: gündem oldu" in draft.x_variants[1]["flags"]
+    assert not any(f.startswith("yasak kalıp") for f in draft.x_variants[0]["flags"])
+    assert "yasak kalıp: şok" in draft.ig["flags"]
+    assert "yasak kalıp: tamamı büyük harf" in draft.ig["flags"]
+
+
+def test_clean_draft_has_no_banned_flags(setup):
+    db, topic, items = setup
+    draft = DraftWriter(FakeClient(full_json()), "m", "f").write(topic, items, db)
+    for variant in draft.x_variants:
+        assert not any(f.startswith("yasak kalıp") for f in variant["flags"])
+    assert draft.ig["flags"] == []

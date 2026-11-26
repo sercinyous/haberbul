@@ -45,3 +45,25 @@ def test_similarity_low_for_rewritten_text():
     source = "Belediye, şehir merkezindeki yeni metro hattının yarın sabah açılacağını duyurdu."
     text = "Raylı sistemde yeni dönem: merkeze giden hat için geri sayım bitiyor 🚇"
     assert source_similarity(text, source) < 0.7
+
+
+def test_style_flags_banned_phrases_case_folded():
+    from gundem.factcheck import style_flags
+    assert style_flags("Bu açıklama DİKKAT ÇEKTİ, işte detaylar") == [
+        "yasak kalıp: dikkat çekti", "yasak kalıp: işte detaylar",
+    ]
+    assert style_flags("Şoke eden değil, sakin bir haber.") == []
+
+
+def test_style_flags_all_caps_run():
+    from gundem.factcheck import style_flags
+    assert style_flags("Son durum: YENİ METRO HATTI yarın açılıyor") == ["yasak kalıp: tamamı büyük harf"]
+    assert style_flags("ABD ve AB, NATO zirvesinde buluştu") == []
+
+
+def test_max_sentence_similarity_skips_short_texts_and_scores_sentences():
+    from gundem.factcheck import max_sentence_similarity
+    source = "Belediye merkezdeki 12 duraklı hattın yarın 06.00'da açılacağını duyurdu."
+    assert max_sentence_similarity(["12 durak"], source) == 0.0
+    padded = "Belediye merkezdeki 12 duraklı hattın yarın açılacağını duyurdu! Bence sabah trafiği bundan sonra çok değişecek."
+    assert max_sentence_similarity([padded], source) > 0.7

@@ -5,7 +5,7 @@ import re
 import anthropic
 from sqlalchemy.orm import Session, object_session
 
-from gundem.factcheck import factcheck, source_similarity
+from gundem.factcheck import factcheck, max_sentence_similarity, style_flags
 from gundem.models import Draft, Item, Source, Topic
 from gundem.voice import load_voice_examples
 
@@ -148,8 +148,11 @@ class DraftWriter:
         system, messages = build_messages(topic, items, session, tone=tone, fast=fast, examples=self.examples)
         model, timeout, max_tokens = (self.fast_model, 15, 500) if fast else (self.model, 40, 1500)
 
+        # Breaking drafts must arrive in seconds: no hidden SDK retries on top of our own.
+        client = self.client.with_options(max_retries=0) if fast else self.client
+
         def call(conversation: list[dict]) -> str:
-            response = self.client.messages.create(
+            response = client.messages.create(
                 model=model, max_tokens=max_tokens, timeout=timeout, system=system, messages=conversation,
             )
             return _first_text(response)
@@ -157,6 +160,7 @@ class DraftWriter:
         credit = source_credit(items)
         try:
             # At most 2 calls for JSON problems and 2 for length problems: never more than 3 in total.
+            # Fast drafts skip the length retry and are truncated right away.
             raw = call(messages)
             try:
                 result = _parse(raw, fast)
@@ -168,7 +172,7 @@ class DraftWriter:
                 raw = call(messages)
                 result = _parse(raw, fast)
             too_long = [v for v in result["x"] if len(_with_credit(v["text"], credit)) > X_LIMIT]
-            if too_long:
+            if too_long and not fast:
                 angles = ", ".join(v["angle"] for v in too_long)
                 messages = messages + [
                     {"role": "assistant", "content": raw},
@@ -197,13 +201,20 @@ class DraftWriter:
             text, truncated = _fit(v["text"], credit)
             variants.append({
                 "angle": v["angle"], "text": text, "truncated": truncated,
-                "flags": factcheck(text, source_text, credit=credit),
+                "flags": factcheck(text, source_text, credit=credit) + style_flags(v["text"]),
             })
-        similarity = max(source_similarity(v["text"], source_text) for v in result["x"])
+        # Bodies are checked without the code-added credit.
+        checked = [v["text"] for v in result["x"]]
         ig = {}
         if not fast:
             ig = dict(result["instagram"])
+            checked += [ig["caption"], *ig["slides"]]
+            ig_flags: list[str] = []
+            for part in [ig["cover"], ig["caption"], *ig["slides"]]:
+                ig_flags += [f for f in style_flags(part) if f not in ig_flags]
+            ig["flags"] = ig_flags
             ig["caption"] = _with_credit(ig["caption"], credit)
+        similarity = max_sentence_similarity(checked, source_text)
 
         draft = Draft(
             topic_id=topic.id, kind="fast" if fast else "full", x_variants=variants, ig=ig, similarity=similarity,
