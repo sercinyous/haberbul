@@ -1,7 +1,6 @@
 # Haber kaynaklari. Anahtar: name (idempotent upsert). `enabled` yalnizca ilk eklemede okunur.
-# NOT: URL'ler ilk yazimda calistirildigi ortamda dogrulanamadi (cikis proxy'si tum
-# haber hostlarina 403 verdi). Bu yuzden hepsi enabled: false; gercek agdan curl ile
-# dogrulandiktan sonra true yapilmali. Tier 1 / son dakika bayraklari tasarima gore.
+# URLs not verified from the build sandbox (egress blocked); check from production network on first run — failing feeds show last_error in the Kaynaklar page.
+# enabled: false = URL guessed, not known; confirm before enabling.
 # Reuters/AP/AFP icin RSS yok: X uzerinden izlenir (Task 4).
 
 - name: AA Güncel
@@ -10,7 +9,6 @@
   url: https://www.aa.com.tr/tr/rss/default?cat=guncel
   tier: 1
   lang: tr
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
 - name: AA Son Dakika
   org: AA
   kind: rss
@@ -18,35 +16,33 @@
   tier: 1
   lang: tr
   is_breaking_feed: true
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
+  enabled: false  # URL tahmin, dogrulanmali
 - name: DHA
   org: DHA
   kind: rss
   url: https://www.dha.com.tr/rss
   tier: 1
   lang: tr
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
+  enabled: false  # URL tahmin, dogrulanmali
 - name: İHA
   org: İHA
   kind: rss
   url: https://www.iha.com.tr/rss
   tier: 1
   lang: tr
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
+  enabled: false  # URL tahmin, dogrulanmali
 - name: BBC Türkçe
   org: BBC
   kind: rss
   url: https://feeds.bbci.co.uk/turkce/rss.xml
   tier: 1
   lang: tr
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
 - name: BBC World
   org: BBC
   kind: rss
   url: https://feeds.bbci.co.uk/news/world/rss.xml
   tier: 1
   lang: en
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
 
 - name: Hürriyet Gündem
   org: Hürriyet
@@ -54,42 +50,36 @@
   url: https://www.hurriyet.com.tr/rss/gundem
   tier: 2
   lang: tr
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
 - name: Milliyet Gündem
   org: Milliyet
   kind: rss
   url: https://www.milliyet.com.tr/rss/rssnew/gundemrss.xml
   tier: 2
   lang: tr
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
 - name: Sabah Gündem
   org: Sabah
   kind: rss
   url: https://www.sabah.com.tr/rss/gundem.xml
   tier: 2
   lang: tr
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
 - name: Sözcü Gündem
   org: Sözcü
   kind: rss
   url: https://www.sozcu.com.tr/feeds-rss-category-gundem
   tier: 2
   lang: tr
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
 - name: CNN Türk
   org: CNN Türk
   kind: rss
   url: https://www.cnnturk.com/feed/rss/all/news
   tier: 2
   lang: tr
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
 - name: NTV Gündem
   org: NTV
   kind: rss
   url: https://www.ntv.com.tr/gundem.rss
   tier: 2
   lang: tr
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
 
 - name: Google Trends TR
   org: Google Trends
@@ -97,11 +87,9 @@
   url: https://trends.google.com/trending/rss?geo=TR
   tier: 3
   lang: tr
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
 - name: Reddit r/Turkey
   org: Reddit
   kind: rss
   url: https://www.reddit.com/r/Turkey/.rss
   tier: 3
   lang: tr
-  enabled: false  # dogrulanamadi: ortam cikisi engelli
