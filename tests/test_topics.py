@@ -186,3 +186,31 @@ def test_split_item_creates_new_topic(db):
     assert new.title == QUAKE_LONG
     assert t.org_count == 1 and t.verified is False
     assert new.org_count == 1 and new.verified is False
+
+
+def test_extra_words_still_merge(db):
+    aa = make_source(db, "AA", 1)
+    hu = make_source(db, "Hürriyet", 2)
+    t1 = assign_topic(make_item(db, aa, "Merkez Bankası faizi yüzde 45'te sabit tuttu"), db, NOW)
+    t2 = assign_topic(make_item(
+        db, hu,
+        "SON DAKİKA: Merkez Bankası politika faizini yüzde 45'te sabit tuttu, piyasalar tepki verdi",
+    ), db, NOW)
+    assert t1.id == t2.id
+
+
+def test_unrelated_titles_with_shared_word_do_not_merge(db):
+    aa = make_source(db, "AA", 1)
+    hu = make_source(db, "Hürriyet", 2)
+    t1 = assign_topic(make_item(db, aa, "Galatasaray derbide Fenerbahçe'yi 2-1 yendi"), db, NOW)
+    t2 = assign_topic(make_item(db, hu, "Fenerbahçe yeni transferini açıkladı"), db, NOW)
+    assert t1.id != t2.id
+
+
+def test_tier3_attach_does_not_bump_last_seen(db):
+    aa = make_source(db, "AA", 1)
+    rd = make_source(db, "Reddit", 3)
+    t = assign_topic(make_item(db, aa, QUAKE), db, NOW)
+    later = NOW + timedelta(hours=1)
+    assign_topic(make_item(db, rd, QUAKE), db, later)
+    assert t.last_seen_at == NOW

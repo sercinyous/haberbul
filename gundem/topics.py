@@ -29,8 +29,11 @@ def normalize_title(title: str) -> str:
 
 
 def similar(a: str, b: str) -> int:
-    if len(a.split()) < 3 or len(b.split()) < 3:
+    na, nb = len(a.split()), len(b.split())
+    if na < 3 or nb < 3:
         return 0
+    if na >= 4 and nb >= 4:
+        return int(fuzz.token_set_ratio(a, b))
     return int(fuzz.token_sort_ratio(a, b))
 
 
@@ -61,7 +64,8 @@ def assign_topic(item: Item, session: Session, now: datetime) -> Topic | None:
         )
         session.add(topic)
         session.flush()
-    topic.last_seen_at = max(topic.last_seen_at, now)
+    if source.tier <= 2:
+        topic.last_seen_at = max(topic.last_seen_at, now)
     if item.is_breaking:
         topic.is_breaking = True
     if source.kind == "trends":
