@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from gundem.budget import XBudget
 from gundem.config import get_settings
@@ -8,8 +9,12 @@ from gundem.models import XSpend
 from gundem.timeutil import local_today
 
 
+def _factory(db):
+    return sessionmaker(bind=db.get_bind(), expire_on_commit=False)
+
+
 def _budget(db, today=date(2026, 3, 10)):
-    return XBudget(db, get_settings(), today)
+    return XBudget(_factory(db), get_settings(), today)
 
 
 def test_cap_split(db):
@@ -55,9 +60,24 @@ def test_budget_resets_at_istanbul_midnight(db):
     day1 = local_today(s.timezone, late)
     day2 = local_today(s.timezone, after)
     assert day1 != day2
-    b1 = XBudget(db, s, day1)
+    b1 = XBudget(_factory(db), s, day1)
     assert b1.try_reserve("breaking", 500)
     assert b1.try_reserve("breaking", 1) is False
-    b2 = XBudget(db, s, day2)
+    b2 = XBudget(_factory(db), s, day2)
     assert b2.used_reads("breaking") == 0
     assert b2.try_reserve("breaking", 10) is True
+
+
+def test_reservation_visible_from_second_session_immediately(db):
+    b = _budget(db)
+    assert b.try_reserve("breaking", 7)
+    with _factory(db)() as other:
+        assert other.scalar(select(XSpend.reads).where(XSpend.job == "breaking")) == 7
+
+
+def test_reservation_survives_caller_rollback(db):
+    b = _budget(db)
+    db.execute(select(1))  # caller has its own open transaction
+    assert b.try_reserve("breaking", 7)
+    db.rollback()
+    assert b.used_reads("breaking") == 7

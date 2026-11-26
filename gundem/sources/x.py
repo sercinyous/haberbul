@@ -98,12 +98,18 @@ class XClient:
             log.warning("x search returned %s", resp.status_code)
             self.budget.refund(job, max_results)
             return [], None
-        body = resp.json()
-        tweets = self._parse(body)
-        meta = body.get("meta", {})
-        used = min(meta.get("result_count", len(tweets)), max_results)
+        try:
+            body = resp.json()
+            tweets = self._parse(body)
+            meta = body.get("meta", {})
+            used = min(meta.get("result_count", len(tweets)), max_results)
+            newest_id = meta.get("newest_id")
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            # X billed this call; keep the full reservation since the read count is unknown.
+            log.warning("x response unparseable, keeping reservation: %s", exc)
+            return [], None
         self.budget.refund(job, max_results - used)
-        return tweets, meta.get("newest_id")
+        return tweets, newest_id
 
     @staticmethod
     def _parse(body: dict) -> list[XTweet]:

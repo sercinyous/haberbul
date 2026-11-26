@@ -1,4 +1,5 @@
 import math
+from collections.abc import Callable
 from datetime import date
 
 from sqlalchemy import select
@@ -16,11 +17,13 @@ _POOL_JOBS = ("velocity", "lookup")
 class XBudget:
     """Per-job daily read budget. Stores read counts; USD is derived.
 
-    Never commits: the caller owns the transaction.
+    Every operation opens its own short session and commits at once, so a reservation is
+    visible to other workers immediately, no row lock is held across an HTTP call, and a
+    caller's rollback cannot lose spend that X already billed.
     """
 
-    def __init__(self, session: Session, settings: Settings, today: date):
-        self.session = session
+    def __init__(self, session_factory: Callable[[], Session], settings: Settings, today: date):
+        self.session_factory = session_factory
         self.settings = settings
         self.today = today
 
@@ -44,9 +47,10 @@ class XBudget:
         return self._share_cap(job)
 
     def used_reads(self, job: str) -> int:
-        reads = self.session.scalar(
-            select(XSpend.reads).where(XSpend.day == self.today, XSpend.job == job)
-        )
+        with self.session_factory() as session:
+            reads = session.scalar(
+                select(XSpend.reads).where(XSpend.day == self.today, XSpend.job == job)
+            )
         return reads or 0
 
     def total_used_usd(self) -> float:
@@ -56,13 +60,13 @@ class XBudget:
     def total_cap_usd(self) -> float:
         return self.settings.x_daily_budget_usd
 
-    def _lock_row(self, job: str) -> XSpend:
-        self.session.execute(
+    def _lock_row(self, session: Session, job: str) -> XSpend:
+        session.execute(
             insert(XSpend)
             .values(day=self.today, job=job, reads=0)
             .on_conflict_do_nothing(index_elements=["day", "job"])
         )
-        return self.session.execute(
+        return session.execute(
             select(XSpend)
             .where(XSpend.day == self.today, XSpend.job == job)
             .with_for_update()
@@ -70,22 +74,22 @@ class XBudget:
         ).scalar_one()
 
     def try_reserve(self, job: str, reads: int) -> bool:
-        row = self._lock_row(job)
-        if job in _POOL_JOBS:
-            # Lock the sibling row too, in fixed order, so the shared pool is race-free.
-            rows = {j: self._lock_row(j) for j in _POOL_JOBS}
-            row = rows[job]
-            used = sum(r.reads for r in rows.values())
-            allowed = used + reads <= self._share_cap("velocity")
-        else:
-            allowed = row.reads + reads <= self._share_cap(job)
-        if not allowed:
-            return False
-        row.reads += reads
-        self.session.flush()
-        return True
+        with self.session_factory() as session:
+            if job in _POOL_JOBS:
+                # Always lock in the fixed _POOL_JOBS order so velocity/lookup cannot deadlock.
+                rows = {j: self._lock_row(session, j) for j in _POOL_JOBS}
+                row = rows[job]
+                allowed = sum(r.reads for r in rows.values()) + reads <= self._share_cap("velocity")
+            else:
+                row = self._lock_row(session, job)
+                allowed = row.reads + reads <= self._share_cap(job)
+            if allowed:
+                row.reads += reads
+            session.commit()
+        return allowed
 
     def refund(self, job: str, reads: int) -> None:
-        row = self._lock_row(job)
-        row.reads = max(0, row.reads - reads)
-        self.session.flush()
+        with self.session_factory() as session:
+            row = self._lock_row(session, job)
+            row.reads = max(0, row.reads - reads)
+            session.commit()

@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 import httpx
 import pytest
 import respx
+from sqlalchemy.orm import sessionmaker
 
 from gundem.budget import XBudget
 from gundem.config import get_settings
@@ -20,7 +21,7 @@ TODAY = date(2026, 3, 10)
 
 
 def _client(db):
-    budget = XBudget(db, get_settings(), TODAY)
+    budget = XBudget(sessionmaker(bind=db.get_bind(), expire_on_commit=False), get_settings(), TODAY)
     http = httpx.Client()
     return XClient("tok", budget, http), budget
 
@@ -108,6 +109,14 @@ def test_budget_exhausted_blocks_without_http(db):
     assert client.search_recent("rival", "q") == ([], None)
     assert not route.called
     assert budget.used_reads("rival") == 250
+
+
+@respx.mock
+def test_unparseable_200_keeps_reservation(db):
+    respx.get(URL).mock(return_value=httpx.Response(200, content=b"<html>not json</html>"))
+    client, budget = _client(db)
+    assert client.search_recent("breaking", "q") == ([], None)
+    assert budget.used_reads("breaking") == 10
 
 
 @respx.mock
