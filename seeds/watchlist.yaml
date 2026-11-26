@@ -1,0 +1,28 @@
+# X izleme listesi. Anahtar: handle (idempotent upsert). `enabled` yalnizca ilk eklemede okunur.
+# AA/DHA/IHA X hesaplari eklenmez: RSS'ten geliyor.
+
+- handle: Reuters
+  role: breaking
+  tier: 1
+- handle: AP
+  role: breaking
+  tier: 1
+- handle: AFP
+  role: breaking
+  tier: 1
+- handle: AFPTurkce
+  role: breaking
+  tier: 1
+
+# Rakipler: Pusholder doldurmali (gercek hesap adlarini yazip enabled: true yapin).
+- handle: RAKIP_HESAP_1
+  role: rival
+  enabled: false
+- handle: RAKIP_HESAP_2
+  role: rival
+  enabled: false
+
+# Pusholder kendi hesabi: gercek adi yazin.
+- handle: PUSHOLDER_HESABI
+  role: own
+  enabled: false
